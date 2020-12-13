@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2019-2019 Basis Technology Corp.
+ * Copyright 2019-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,10 +38,10 @@ import org.netbeans.spi.sendopts.OptionProcessor;
 import org.openide.LifecycleManager;
 import org.openide.util.Lookup;
 import org.sleuthkit.autopsy.casemodule.Case;
+import org.sleuthkit.autopsy.casemodule.Case.CaseType;
 import org.sleuthkit.autopsy.casemodule.CaseActionException;
 import org.sleuthkit.autopsy.casemodule.CaseDetails;
 import org.sleuthkit.autopsy.casemodule.CaseMetadata;
-import static org.sleuthkit.autopsy.casemodule.CaseMetadata.getFileExtension;
 import org.sleuthkit.autopsy.core.RuntimeProperties;
 import org.sleuthkit.autopsy.corecomponentinterfaces.DataSourceProcessorCallback;
 import static org.sleuthkit.autopsy.corecomponentinterfaces.DataSourceProcessorCallback.DataSourceProcessorResult.CRITICAL_ERRORS;
@@ -73,7 +73,7 @@ import org.sleuthkit.datamodel.TskCoreException;
  * cause Autopsy to create a case, add a specified data source, run ingest on
  * that data source, list all data sources in the case, and generate reports.
  */
-public class CommandLineIngestManager {
+public class CommandLineIngestManager extends CommandLineManager{
 
     private static final Logger LOGGER = Logger.getLogger(CommandLineIngestManager.class.getName());
     private static final Set<IngestManager.IngestJobEvent> INGEST_JOB_EVENTS_OF_INTEREST = EnumSet.of(IngestManager.IngestJobEvent.CANCELLED, IngestManager.IngestJobEvent.COMPLETED);
@@ -141,7 +141,7 @@ public class CommandLineIngestManager {
 
                 if (commands == null || commands.isEmpty()) {
                     LOGGER.log(Level.SEVERE, "No command line commands specified");
-                    System.err.println("No command line commands specified");
+                    System.out.println("No command line commands specified");
                     return;
                 }
 
@@ -157,14 +157,19 @@ public class CommandLineIngestManager {
                                     Map<String, String> inputs = command.getInputs();
                                     String baseCaseName = inputs.get(CommandLineCommand.InputType.CASE_NAME.name());
                                     String rootOutputDirectory = inputs.get(CommandLineCommand.InputType.CASES_BASE_DIR_PATH.name());
-                                    openCase(baseCaseName, rootOutputDirectory);
+                                    CaseType caseType = CaseType.SINGLE_USER_CASE;
+                                    String caseTypeString = inputs.get(CommandLineCommand.InputType.CASE_TYPE.name());
+                                    if (caseTypeString != null && caseTypeString.equalsIgnoreCase(CommandLineOptionProcessor.CASETYPE_MULTI)) {
+                                        caseType = CaseType.MULTI_USER_CASE;
+                                    }
+                                    openCase(baseCaseName, rootOutputDirectory, caseType);
 
                                     String outputDirPath = getOutputDirPath(caseForJob);
-                                    OutputGenerator.saveCreateCaseOutput(caseForJob, outputDirPath, baseCaseName);
+                                        OutputGenerator.saveCreateCaseOutput(caseForJob, outputDirPath, baseCaseName);
                                 } catch (CaseActionException ex) {
                                     String baseCaseName = command.getInputs().get(CommandLineCommand.InputType.CASE_NAME.name());
                                     LOGGER.log(Level.SEVERE, "Error creating or opening case " + baseCaseName, ex);
-                                    System.err.println("Error creating or opening case " + baseCaseName);
+                                    System.out.println("Error creating or opening case " + baseCaseName);
                                     // Do not process any other commands
                                     return;
                                 }
@@ -178,7 +183,7 @@ public class CommandLineIngestManager {
                                     // open the case, if it hasn't been already opened by CREATE_CASE command
                                     if (caseForJob == null) {
                                         String caseDirPath = inputs.get(CommandLineCommand.InputType.CASE_FOLDER_PATH.name());
-                                        openCase(caseDirPath);
+                                        caseForJob = CommandLineIngestManager.this.openCase(caseDirPath);
                                     }
 
                                     String dataSourcePath = inputs.get(CommandLineCommand.InputType.DATA_SOURCE_PATH.name());
@@ -190,7 +195,7 @@ public class CommandLineIngestManager {
                                 } catch (InterruptedException | AutoIngestDataSourceProcessor.AutoIngestDataSourceProcessorException | CaseActionException ex) {
                                     String dataSourcePath = command.getInputs().get(CommandLineCommand.InputType.DATA_SOURCE_PATH.name());
                                     LOGGER.log(Level.SEVERE, "Error adding data source " + dataSourcePath, ex);
-                                    System.err.println("Error adding data source " + dataSourcePath);
+                                    System.out.println("Error adding data source " + dataSourcePath);
                                     // Do not process any other commands
                                     return;
                                 }
@@ -204,7 +209,7 @@ public class CommandLineIngestManager {
                                     // open the case, if it hasn't been already opened by CREATE_CASE or ADD_DATA_SOURCE commands
                                     if (caseForJob == null) {
                                         String caseDirPath = inputs.get(CommandLineCommand.InputType.CASE_FOLDER_PATH.name());
-                                        openCase(caseDirPath);
+                                        caseForJob = CommandLineIngestManager.this.openCase(caseDirPath);
                                     }
 
                                     // populate the AutoIngestDataSource structure, if that hasn't been done by ADD_DATA_SOURCE command
@@ -219,7 +224,7 @@ public class CommandLineIngestManager {
                                             content = Case.getCurrentCaseThrows().getSleuthkitCase().getContentById(dataSourceObjId);
                                         } catch (TskCoreException ex) {
                                             LOGGER.log(Level.SEVERE, "Exception while trying to find data source with object ID " + dataSourceId, ex);
-                                            System.err.println("Exception while trying to find data source with object ID " + dataSourceId);
+                                            System.out.println("Exception while trying to find data source with object ID " + dataSourceId);
                                             // Do not process any other commands
                                             return;
                                         }
@@ -244,7 +249,7 @@ public class CommandLineIngestManager {
                                 } catch (InterruptedException | CaseActionException ex) {
                                     String dataSourcePath = command.getInputs().get(CommandLineCommand.InputType.DATA_SOURCE_PATH.name());
                                     LOGGER.log(Level.SEVERE, "Error running ingest on data source " + dataSourcePath, ex);
-                                    System.err.println("Error running ingest on data source " + dataSourcePath);
+                                    System.out.println("Error running ingest on data source " + dataSourcePath);
                                     // Do not process any other commands
                                     return;
                                 }
@@ -259,7 +264,7 @@ public class CommandLineIngestManager {
                                     // open the case, if it hasn't been already opened by previous command
                                     if (caseForJob == null) {
                                         String caseDirPath = inputs.get(CommandLineCommand.InputType.CASE_FOLDER_PATH.name());
-                                        openCase(caseDirPath);
+                                        caseForJob = CommandLineIngestManager.this.openCase(caseDirPath);
                                     }
 
                                     String outputDirPath = getOutputDirPath(caseForJob);
@@ -267,7 +272,7 @@ public class CommandLineIngestManager {
                                 } catch (CaseActionException ex) {
                                     String caseDirPath = command.getInputs().get(CommandLineCommand.InputType.CASE_FOLDER_PATH.name());
                                     LOGGER.log(Level.SEVERE, "Error opening case in case directory: " + caseDirPath, ex);
-                                    System.err.println("Error opening case in case directory: " + caseDirPath);
+                                    System.out.println("Error opening case in case directory: " + caseDirPath);
                                     // Do not process any other commands
                                     return;
                                 }
@@ -282,17 +287,22 @@ public class CommandLineIngestManager {
                                     // open the case, if it hasn't been already opened by previous command
                                     if (caseForJob == null) {
                                         String caseDirPath = inputs.get(CommandLineCommand.InputType.CASE_FOLDER_PATH.name());
-                                        openCase(caseDirPath);
+                                        caseForJob = CommandLineIngestManager.this.openCase(caseDirPath);
+                                    }
+                                    // generate reports
+                                    String reportName = inputs.get(CommandLineCommand.InputType.REPORT_PROFILE_NAME.name());
+                                    if (reportName == null) {
+                                        reportName = CommandLineIngestSettingsPanel.getDefaultReportingConfigName();
                                     }
 
                                     // generate reports
-                                    ReportProgressIndicator progressIndicator = new ReportProgressIndicator(new LoggingProgressIndicator());
-                                    ReportGenerator generator = new ReportGenerator(CommandLineIngestSettingsPanel.getReportingConfigName(), progressIndicator);
+                                    ReportProgressIndicator progressIndicator = new ReportProgressIndicator(new CommandLineProgressIndicator());
+                                    ReportGenerator generator = new ReportGenerator(reportName, progressIndicator);
                                     generator.generateReports();
                                 } catch (CaseActionException ex) {
                                     String caseDirPath = command.getInputs().get(CommandLineCommand.InputType.CASE_FOLDER_PATH.name());
                                     LOGGER.log(Level.SEVERE, "Error opening case in case directory: " + caseDirPath, ex);
-                                    System.err.println("Error opening case in case directory: " + caseDirPath);
+                                    System.out.println("Error opening case in case directory: " + caseDirPath);
                                     // Do not process any other commands
                                     return;
                                 }
@@ -310,14 +320,14 @@ public class CommandLineIngestManager {
                      * logged.
                      */
                     LOGGER.log(Level.SEVERE, "Unexpected error", ex);
-                    System.err.println("Unexpected error. Exiting...");
+                    System.out.println("Unexpected error. Exiting...");
 
                 } finally {
                     try {
                         Case.closeCurrentCase();
                     } catch (CaseActionException ex) {
                         LOGGER.log(Level.WARNING, "Exception while closing case", ex);
-                        System.err.println("Exception while closing case");
+                        System.out.println("Exception while closing case");
                     }
                 }
 
@@ -337,10 +347,11 @@ public class CommandLineIngestManager {
          * @param baseCaseName        Case name
          * @param rootOutputDirectory Full path to directory in which case
          *                            output folder will be created
+         * @param caseType            Type of case being created
          *
          * @throws CaseActionException
          */
-        private void openCase(String baseCaseName, String rootOutputDirectory) throws CaseActionException {
+        private void openCase(String baseCaseName, String rootOutputDirectory, CaseType caseType) throws CaseActionException {
 
             LOGGER.log(Level.INFO, "Opening case {0} in directory {1}", new Object[]{baseCaseName, rootOutputDirectory});
             Path caseDirectoryPath = findCaseDirectory(Paths.get(rootOutputDirectory), baseCaseName);
@@ -355,60 +366,11 @@ public class CommandLineIngestManager {
                 Case.createCaseDirectory(caseDirectoryPath.toString(), Case.CaseType.SINGLE_USER_CASE);
 
                 CaseDetails caseDetails = new CaseDetails(baseCaseName);
-                Case.createAsCurrentCase(Case.CaseType.SINGLE_USER_CASE, caseDirectoryPath.toString(), caseDetails);
+                Case.createAsCurrentCase(caseType, caseDirectoryPath.toString(), caseDetails);
             }
 
             caseForJob = Case.getCurrentCase();
             LOGGER.log(Level.INFO, "Opened case {0}", caseForJob.getName());
-        }
-
-        /**
-         * Opens existing case.
-         *
-         * @param caseFolderPath full path to case directory
-         *
-         * @throws CaseActionException
-         */
-        private void openCase(String caseFolderPath) throws CaseActionException {
-
-            LOGGER.log(Level.INFO, "Opening case in directory {0}", caseFolderPath);
-
-            String metadataFilePath = findAutFile(caseFolderPath);
-            Case.openAsCurrentCase(metadataFilePath);
-
-            caseForJob = Case.getCurrentCase();
-            LOGGER.log(Level.INFO, "Opened case {0}", caseForJob.getName());
-        }
-
-        /**
-         * Finds the path to the .aut file for the specified case directory.
-         *
-         * @param caseDirectory the directory to check for a .aut file
-         *
-         * @return the path to the first .aut file found in the directory
-         *
-         * @throws CaseActionException if there was an issue finding a .aut file
-         */
-        private String findAutFile(String caseDirectory) throws CaseActionException {
-            File caseFolder = Paths.get(caseDirectory).toFile();
-            if (caseFolder.exists()) {
-                /*
-                 * Search for '*.aut' files.
-                 */
-                File[] fileArray = caseFolder.listFiles();
-                if (fileArray == null) {
-                    throw new CaseActionException("No files found in case directory");
-                }
-                String autFilePath = null;
-                for (File file : fileArray) {
-                    String name = file.getName().toLowerCase();
-                    if (autFilePath == null && name.endsWith(getFileExtension())) {
-                        return file.getAbsolutePath();
-                    }
-                }
-                throw new CaseActionException("No .aut files found in case directory");
-            }
-            throw new CaseActionException("Case directory was not found");
         }
 
         /**
@@ -418,17 +380,11 @@ public class CommandLineIngestManager {
          * @param caseForJob The case
          * @param dataSource The data source.
          *
-         * @throws
-         * AutoIngestDataSourceProcessor.AutoIngestDataSourceProcessorExceptioif
-         *                                                                     there
-         *                                                                     was
-         *                                                                     a
-         *                                                                     DSP
-         *                                                                     processing
-         *                                                                     error
+         * @throws AutoIngestDataSourceProcessorException if there was a DSP
+         * processing error.
          *
-         * @throws ead running the job processing task is interrupted while
-         * blocked, i.e., if auto ingest is shutting down.
+         * @throws InterruptedException running the job processing task while
+         * blocking, i.e., if auto ingest is shutting down.
          */
         private void runDataSourceProcessor(Case caseForJob, AutoIngestDataSource dataSource) throws InterruptedException, AutoIngestDataSourceProcessor.AutoIngestDataSourceProcessorException {
 
@@ -551,7 +507,7 @@ public class CommandLineIngestManager {
                 if (selectedProfile == null) {
                     // unable to find the user specified profile
                     LOGGER.log(Level.SEVERE, "Unable to find ingest profile: {0}. Ingest cancelled!", ingestProfileName);
-                    System.err.println("Unable to find ingest profile: " + ingestProfileName + ". Ingest cancelled!");
+                    System.out.println("Unable to find ingest profile: " + ingestProfileName + ". Ingest cancelled!");
                     return;
                 }
 
@@ -560,7 +516,7 @@ public class CommandLineIngestManager {
                 if (selectedFileSet == null) {
                     // unable to find the user specified profile
                     LOGGER.log(Level.SEVERE, "Unable to find file filter {0} for ingest profile: {1}. Ingest cancelled!", new Object[]{selectedProfile.getFileIngestFilter(), ingestProfileName});
-                    System.err.println("Unable to find file filter " + selectedProfile.getFileIngestFilter() + " for ingest profile: " + ingestProfileName + ". Ingest cancelled!");
+                    System.out.println("Unable to find file filter " + selectedProfile.getFileIngestFilter() + " for ingest profile: " + ingestProfileName + ". Ingest cancelled!");
                     return;
                 }
             }

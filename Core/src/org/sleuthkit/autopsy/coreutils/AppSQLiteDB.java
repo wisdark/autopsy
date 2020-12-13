@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2019 Basis Technology Corp.
+ * Copyright 2019-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -287,6 +287,95 @@ public final class AppSQLiteDB {
     }
 
     /**
+     * Checks if a column exists in a table.
+     *
+     * @param tableName name of the table
+     * @param columnName column name to check
+     *
+     * @return true if the column exists, false otherwise
+     * @throws TskCoreException
+     */
+    public boolean columnExists(String tableName, String columnName) throws TskCoreException {
+
+        boolean columnExists = false;
+        Statement colExistsStatement = null;
+        ResultSet resultSet = null;
+        try {
+            colExistsStatement = connection.createStatement();
+            String tableInfoQuery = "PRAGMA table_info(%s)";  //NON-NLS
+            resultSet = colExistsStatement.executeQuery(String.format(tableInfoQuery, tableName));
+            while (resultSet.next()) {
+                if (resultSet.getString("name").equalsIgnoreCase(columnName)) {
+                    columnExists = true;
+                    break;
+                }
+            }
+        } catch (SQLException ex) {
+            throw new TskCoreException("Error checking if column  " + columnName + "exists ", ex);
+        } finally {
+            if (resultSet != null) {
+                try {
+                    resultSet.close();
+                } catch (SQLException ex2) {
+                    logger.log(Level.WARNING, "Failed to close resultset after checking column", ex2);
+                }
+            }
+            if (colExistsStatement != null) {
+                try {
+                    colExistsStatement.close();
+                } catch (SQLException ex2) {
+                    logger.log(Level.SEVERE, "Error closing Statement", ex2); //NON-NLS
+                }
+            }
+        }
+        return columnExists;
+    }
+    
+    /**
+     * Checks if a table exists in the case database.
+     *
+     * @param tableName name of the table to check
+     *
+     * @return true if the table exists, false otherwise
+     * @throws TskCoreException
+     */
+    public boolean tableExists(String tableName) throws TskCoreException {
+
+        boolean tableExists = false;
+        Statement tableExistsStatement = null;
+        ResultSet resultSet = null;
+        try {
+
+            tableExistsStatement = connection.createStatement();
+            resultSet = tableExistsStatement.executeQuery("SELECT name FROM sqlite_master WHERE type='table'");  //NON-NLS
+            while (resultSet.next()) {
+                if (resultSet.getString("name").equalsIgnoreCase(tableName)) { //NON-NLS
+                    tableExists = true;
+                    break;
+                }
+            }
+        } catch (SQLException ex) {
+            throw new TskCoreException("Error checking if table  " + tableName + "exists ", ex);
+        } finally {
+            if (resultSet != null) {
+                try {
+                    resultSet.close();
+                } catch (SQLException ex2) {
+                    logger.log(Level.WARNING, "Failed to close resultset after checking table", ex2);
+                }
+            }
+            if (tableExistsStatement != null) {
+                try {
+                    tableExistsStatement.close();
+                } catch (SQLException ex2) {
+                    logger.log(Level.SEVERE, "Error closing Statement", ex2); //NON-NLS
+                }
+            }
+        }
+        return tableExists;
+    }
+        
+    /**
      * Searches for a meta file associated with the give SQLite database. If
      * found, it copies this file into the temp directory of the current case.
      *
@@ -301,14 +390,17 @@ public final class AppSQLiteDB {
     private static void findAndCopySQLiteMetaFile(AbstractFile sqliteFile,
             String metaFileName) throws NoCurrentCaseException, TskCoreException, IOException {
 
+        // Do not look for metaFile if this is a carved directory
+        if(sqliteFile.getParentPath().equalsIgnoreCase("/$carvedfiles/")) {
+            return;
+        }
+        
         Case openCase = Case.getCurrentCaseThrows();
         SleuthkitCase sleuthkitCase = openCase.getSleuthkitCase();
         Services services = new Services(sleuthkitCase);
         FileManager fileManager = services.getFileManager();
-
-        List<AbstractFile> metaFiles = fileManager.findFiles(
-                sqliteFile.getDataSource(), metaFileName,
-                sqliteFile.getParent().getName());
+        
+        List<AbstractFile> metaFiles = fileManager.findFilesExactName(sqliteFile.getParent().getId(), metaFileName);
 
         if (metaFiles != null) {
             for (AbstractFile metaFile : metaFiles) {

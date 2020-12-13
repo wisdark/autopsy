@@ -4,11 +4,11 @@
 <!-- If you delete this file and reopen the project it will be recreated. -->
 <project name="Autopsy 4" default="build" basedir=".">
     <description>Builds the module suite Autopsy 4.</description>
-	
+
     <import file="nbproject/build-impl.xml"/>
     <import file="${basedir}/TSKVersion.xml"/>
     <!-- IMPORTANT: nbproject/platform.properties has a netbeans-plat-version property that MUST be kept in sync (manually) -->
-    <property name="netbeans-plat-version" value="8.2" />
+    <property name="netbeans-plat-version" value="11.3" />
     <property name="nbplatform.active.dir" value="${basedir}/netbeans-plat/${netbeans-plat-version}" />
     <!-- Supported java versions.-->
     <condition property="supported-java-versions">
@@ -214,7 +214,7 @@
     </target>
     
     <!-- override build to add branding -->
-    <target name="build" depends="build-brand,suite.build" description="Compiles autopsy and produces a basic branded build that can run on a dev system" />
+    <target name="build" depends="build-brand,suite.build,chmod_executables" description="Compiles autopsy and produces a basic branded build that can run on a dev system" />
  
     <target name="build-brand" depends="-init">
         
@@ -320,5 +320,14 @@
         <delete dir="${nbdist.dir}/${app.name}-tmp-installer" quiet="true"/>
         
         <antcall target="build-installer-${os.family}" />
+    </target>
+    
+     <target name="chmod_executables" >
+        <chmod perm="a+x">
+            <fileset dir="${cluster}/markmckinnon" casesensitive="no" id="mm">
+                <include name="*_linux"/>
+                <include name="*_macos"/>
+            </fileset>
+        </chmod>
     </target>
 </project>

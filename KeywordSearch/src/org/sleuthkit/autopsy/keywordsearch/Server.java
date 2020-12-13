@@ -18,6 +18,7 @@
  */
 package org.sleuthkit.autopsy.keywordsearch;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import java.awt.event.ActionEvent;
 import java.beans.PropertyChangeListener;
 import java.io.BufferedReader;
@@ -42,9 +43,11 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Level;
+import static java.util.stream.Collectors.toList;
 import javax.swing.AbstractAction;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrRequest;
@@ -73,6 +76,7 @@ import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.coreutils.MessageNotifyUtil;
 import org.sleuthkit.autopsy.coreutils.ModuleSettings;
 import org.sleuthkit.autopsy.coreutils.PlatformUtil;
+import org.sleuthkit.autopsy.coreutils.ThreadUtils;
 import org.sleuthkit.autopsy.healthmonitor.HealthMonitor;
 import org.sleuthkit.autopsy.healthmonitor.TimingMetric;
 import org.sleuthkit.autopsy.keywordsearchservice.KeywordSearchServiceException;
@@ -130,6 +134,18 @@ public class Server {
                 return "content_ws"; //NON-NLS
             }
         },
+        CONTENT_JA {
+            @Override
+            public String toString() {
+                return "content_ja"; //NON-NLS
+            }
+        },
+        LANGUAGE {
+            @Override
+            public String toString() {
+                return "language"; //NON-NLS
+            }
+        },
         FILE_NAME {
             @Override
             public String toString() {
@@ -174,6 +190,17 @@ public class Server {
             @Override
             public String toString() {
                 return "chunk_size"; //NON-NLS
+            }
+        },
+        /**
+         * termfreq is a function which returns the number of times the term
+         * appears. This is not an actual field defined in schema.xml, but can
+         * be gotten from returned documents in the same way as fields.
+         */
+        TERMFREQ {
+            @Override
+            public String toString() {
+                return "termfreq"; //NON-NLS
             }
         }
     };
@@ -502,7 +529,7 @@ public class Server {
                     @Override
                     public void run() {
                         MessageNotifyUtil.Notify.error(
-                                NbBundle.getMessage(this.getClass(), "Installer.errorInitKsmMsg"), 
+                                NbBundle.getMessage(this.getClass(), "Installer.errorInitKsmMsg"),
                                 Bundle.Server_status_failed_msg());
                     }
                 });
@@ -812,7 +839,8 @@ public class Server {
             connectToSolrServer(currentSolrServer);
             HealthMonitor.submitTimingMetric(metric);
 
-        } catch (SolrServerException | IOException ex) {
+        } catch (Exception ex) {
+            // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
             throw new KeywordSearchModuleException(NbBundle.getMessage(Server.class, "Server.connect.exception.msg", ex.getLocalizedMessage()), ex);
         }
 
@@ -867,28 +895,30 @@ public class Server {
             throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.openCore.exception.cantOpen.msg"), ex);
         }
     }
-    
+
     /**
-     * Get the host and port for a multiuser case.
-     * If the file solrserver.txt exists, then use the values from that file.
-     * Otherwise use the settings from the properties file.
-     * 
+     * Get the host and port for a multiuser case. If the file solrserver.txt
+     * exists, then use the values from that file. Otherwise use the settings
+     * from the properties file.
+     *
      * @param caseDirectory Current case directory
-     * @return IndexingServerProperties containing the solr host/port for this case
+     *
+     * @return IndexingServerProperties containing the solr host/port for this
+     *         case
      */
     public static IndexingServerProperties getMultiUserServerProperties(String caseDirectory) {
 
         Path serverFilePath = Paths.get(caseDirectory, "solrserver.txt");
-        if(serverFilePath.toFile().exists()){
-            try{
+        if (serverFilePath.toFile().exists()) {
+            try {
                 List<String> lines = Files.readAllLines(serverFilePath);
-                if(lines.isEmpty()) {
+                if (lines.isEmpty()) {
                     logger.log(Level.SEVERE, "solrserver.txt file does not contain any data");
-                } else if (! lines.get(0).contains(",")) {
+                } else if (!lines.get(0).contains(",")) {
                     logger.log(Level.SEVERE, "solrserver.txt file is corrupt - could not read host/port from " + lines.get(0));
                 } else {
                     String[] parts = lines.get(0).split(",");
-                    if(parts.length != 2) {
+                    if (parts.length != 2) {
                         logger.log(Level.SEVERE, "solrserver.txt file is corrupt - could not read host/port from " + lines.get(0));
                     } else {
                         return new IndexingServerProperties(parts[0], parts[1]);
@@ -898,102 +928,104 @@ public class Server {
                 logger.log(Level.SEVERE, "solrserver.txt file could not be read", ex);
             }
         }
-        
+
         // Default back to the user preferences if the solrserver.txt file was not found or if an error occurred
         String host = UserPreferences.getIndexingServerHost();
         String port = UserPreferences.getIndexingServerPort();
         return new IndexingServerProperties(host, port);
     }
-    
+
     /**
-     * Pick a solr server to use for this case and record it in the case directory.
-     * Looks for a file named "solrServerList.txt" in the root output directory - 
-     * if this does not exist then no server is recorded.
-     * 
-     * Format of solrServerList.txt:
-     * (host),(port)
-     * Ex: 10.1.2.34,8983
-     * 
+     * Pick a solr server to use for this case and record it in the case
+     * directory. Looks for a file named "solrServerList.txt" in the root output
+     * directory - if this does not exist then no server is recorded.
+     *
+     * Format of solrServerList.txt: (host),(port) Ex: 10.1.2.34,8983
+     *
      * @param rootOutputDirectory
      * @param caseDirectoryPath
-     * @throws KeywordSearchModuleException 
+     *
+     * @throws KeywordSearchModuleException
      */
     public static void selectSolrServerForCase(Path rootOutputDirectory, Path caseDirectoryPath) throws KeywordSearchModuleException {
         // Look for the solr server list file
         String serverListName = "solrServerList.txt";
         Path serverListPath = Paths.get(rootOutputDirectory.toString(), serverListName);
-        if(serverListPath.toFile().exists()){
-            
+        if (serverListPath.toFile().exists()) {
+
             // Read the list of solr servers
             List<String> lines;
-            try{
+            try {
                 lines = Files.readAllLines(serverListPath);
-            } catch (IOException ex){
+            } catch (IOException ex) {
                 throw new KeywordSearchModuleException(serverListName + " could not be read", ex);
             }
-            
+
             // Remove any lines that don't contain a comma (these are likely just whitespace)
             for (Iterator<String> iterator = lines.iterator(); iterator.hasNext();) {
                 String line = iterator.next();
-                if (! line.contains(",")) {
+                if (!line.contains(",")) {
                     // Remove the current element from the iterator and the list.
                     iterator.remove();
                 }
             }
-            if(lines.isEmpty()) {
+            if (lines.isEmpty()) {
                 throw new KeywordSearchModuleException(serverListName + " had no valid server information");
             }
-                
+
             // Choose which server to use
             int rnd = new Random().nextInt(lines.size());
             String[] parts = lines.get(rnd).split(",");
-            if(parts.length != 2) {
+            if (parts.length != 2) {
                 throw new KeywordSearchModuleException("Invalid server data: " + lines.get(rnd));
             }
-                
+
             // Split it up just to do a sanity check on the data
             String host = parts[0];
-            String port = parts[1];                
-            if(host.isEmpty() || port.isEmpty()) {
+            String port = parts[1];
+            if (host.isEmpty() || port.isEmpty()) {
                 throw new KeywordSearchModuleException("Invalid server data: " + lines.get(rnd));
             }
-                
+
             // Write the server data to a file
             Path serverFile = Paths.get(caseDirectoryPath.toString(), "solrserver.txt");
             try {
                 caseDirectoryPath.toFile().mkdirs();
-                if (! caseDirectoryPath.toFile().exists()) {
+                if (!caseDirectoryPath.toFile().exists()) {
                     throw new KeywordSearchModuleException("Case directory " + caseDirectoryPath.toString() + " does not exist");
                 }
                 Files.write(serverFile, lines.get(rnd).getBytes());
-            } catch (IOException ex){
+            } catch (IOException ex) {
                 throw new KeywordSearchModuleException(serverFile.toString() + " could not be written", ex);
             }
         }
     }
-    
+
     /**
      * Helper class to store the current server properties
      */
     public static class IndexingServerProperties {
+
         private final String host;
         private final String port;
-        
-        IndexingServerProperties (String host, String port) {
+
+        IndexingServerProperties(String host, String port) {
             this.host = host;
             this.port = port;
         }
 
         /**
          * Get the host
+         *
          * @return host
          */
         public String getHost() {
             return host;
         }
-        
+
         /**
          * Get the port
+         *
          * @return port
          */
         public String getPort() {
@@ -1048,7 +1080,8 @@ public class Server {
             }
             try {
                 return currentCore.queryNumIndexedFiles();
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryNumIdxFiles.exception.msg"), ex);
             }
         } finally {
@@ -1073,7 +1106,8 @@ public class Server {
             }
             try {
                 return currentCore.queryNumIndexedChunks();
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryNumIdxChunks.exception.msg"), ex);
             }
         } finally {
@@ -1098,7 +1132,8 @@ public class Server {
             }
             try {
                 return currentCore.queryNumIndexedDocuments();
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryNumIdxDocs.exception.msg"), ex);
             }
         } finally {
@@ -1124,7 +1159,8 @@ public class Server {
             }
             try {
                 return currentCore.queryIsIndexed(contentID);
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryIsIdxd.exception.msg"), ex);
             }
 
@@ -1152,7 +1188,8 @@ public class Server {
             }
             try {
                 return currentCore.queryNumFileChunks(fileID);
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryNumFileChunks.exception.msg"), ex);
             }
         } finally {
@@ -1178,7 +1215,8 @@ public class Server {
             }
             try {
                 return currentCore.query(sq);
-            } catch (SolrServerException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 logger.log(Level.SEVERE, "Solr query failed: " + sq.getQuery(), ex); //NON-NLS
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.query.exception.msg", sq.getQuery()), ex);
             }
@@ -1206,7 +1244,8 @@ public class Server {
             }
             try {
                 return currentCore.query(sq, method);
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 logger.log(Level.SEVERE, "Solr query failed: " + sq.getQuery(), ex); //NON-NLS
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.query2.exception.msg", sq.getQuery()), ex);
             }
@@ -1233,12 +1272,33 @@ public class Server {
             }
             try {
                 return currentCore.queryTerms(sq);
-            } catch (SolrServerException | IOException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 logger.log(Level.SEVERE, "Solr terms query failed: " + sq.getQuery(), ex); //NON-NLS
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryTerms.exception.msg", sq.getQuery()), ex);
             }
         } finally {
             currentCoreLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Delete a data source from SOLR.
+     *
+     * @param dataSourceId to delete
+     *
+     * @throws NoOpenCoreException
+     */
+    void deleteDataSource(Long dataSourceId) throws IOException, KeywordSearchModuleException, NoOpenCoreException, SolrServerException {
+        try {
+            currentCoreLock.writeLock().lock();
+            if (null == currentCore) {
+                throw new NoOpenCoreException();
+            }
+            currentCore.deleteDataSource(dataSourceId);
+            currentCore.commit();
+        } finally {
+            currentCoreLock.writeLock().unlock();
         }
     }
 
@@ -1352,10 +1412,10 @@ public class Server {
      * @throws IOException
      */
     void connectToSolrServer(HttpSolrServer solrServer) throws SolrServerException, IOException {
-        TimingMetric metric = HealthMonitor.getTimingMetric("Solr: Connectivity check");            
+        TimingMetric metric = HealthMonitor.getTimingMetric("Solr: Connectivity check");
         CoreAdminRequest statusRequest = new CoreAdminRequest();
-        statusRequest.setCoreName( null );
-        statusRequest.setAction( CoreAdminParams.CoreAdminAction.STATUS );
+        statusRequest.setCoreName(null);
+        statusRequest.setAction(CoreAdminParams.CoreAdminAction.STATUS);
         statusRequest.setIndexInfoNeeded(false);
         statusRequest.process(solrServer);
         HealthMonitor.submitTimingMetric(metric);
@@ -1413,18 +1473,28 @@ public class Server {
         // core in it, and is only good for core-specific operations
         private final HttpSolrServer solrCore;
         
+        private final int maxBufferSize;
+        private final List<SolrInputDocument> buffer;
+        private final Object bufferLock;
+        
+        private final ScheduledThreadPoolExecutor periodicTasksExecutor;
+        private static final long PERIODIC_BATCH_SEND_INTERVAL_MINUTES = 10;
+        private static final int NUM_BATCH_UPDATE_RETRIES = 10;
+        private static final long SLEEP_BETWEEN_RETRIES_MS = 10000; // 10 seconds
+
         private final int QUERY_TIMEOUT_MILLISECONDS = 86400000; // 24 Hours = 86,400,000 Milliseconds
 
         private Core(String name, CaseType caseType, Index index) {
             this.name = name;
             this.caseType = caseType;
             this.textIndex = index;
+            bufferLock = new Object();
 
             this.solrCore = new HttpSolrServer(currentSolrServer.getBaseURL() + "/" + name); //NON-NLS
 
             //TODO test these settings
             // socket read timeout, make large enough so can index larger files
-            solrCore.setSoTimeout(QUERY_TIMEOUT_MILLISECONDS);  
+            solrCore.setSoTimeout(QUERY_TIMEOUT_MILLISECONDS);
             //solrCore.setConnectionTimeout(1000);
             solrCore.setDefaultMaxConnectionsPerHost(32);
             solrCore.setMaxTotalConnections(32);
@@ -1434,7 +1504,45 @@ public class Server {
             solrCore.setAllowCompression(true);
             solrCore.setParser(new XMLResponseParser()); // binary parser is used by default
 
+            // document batching
+            maxBufferSize = org.sleuthkit.autopsy.keywordsearch.UserPreferences.getDocumentsQueueSize();
+            logger.log(Level.INFO, "Using Solr document queue size = {0}", maxBufferSize); //NON-NLS
+            buffer = new ArrayList<>(maxBufferSize);
+            periodicTasksExecutor = new ScheduledThreadPoolExecutor(1, new ThreadFactoryBuilder().setNameFormat("periodic-batched-document-task-%d").build()); //NON-NLS
+            periodicTasksExecutor.scheduleWithFixedDelay(new SendBatchedDocumentsTask(), PERIODIC_BATCH_SEND_INTERVAL_MINUTES, PERIODIC_BATCH_SEND_INTERVAL_MINUTES, TimeUnit.MINUTES);
         }
+        
+        /**
+         * A task that periodically sends batched documents to Solr. Batched documents
+         * get sent automatically as soon as the batching buffer is gets full. However,
+         * if the buffer is not full, we want to periodically send the batched documents
+         * so that users are able to see them in their keyword searches.
+         */
+        private final class SendBatchedDocumentsTask implements Runnable {
+
+            @Override
+            public void run() {
+                List<SolrInputDocument> clone;
+                synchronized (bufferLock) {
+                    
+                    if (buffer.isEmpty()) {
+                        return;
+                    }
+                    
+                    // Buffer is full. Make a clone and release the lock, so that we don't
+                    // hold other ingest threads
+                    clone = buffer.stream().collect(toList());
+                    buffer.clear();
+                }
+
+                try {
+                    // send the cloned list to Solr
+                    sendBufferedDocs(clone);
+                } catch (KeywordSearchModuleException ex) {
+                    logger.log(Level.SEVERE, "Periodic  batched document update failed", ex); //NON-NLS
+                }
+            }
+        }        
 
         /**
          * Get the name of the core
@@ -1456,7 +1564,8 @@ public class Server {
         private NamedList<Object> request(SolrRequest request) throws SolrServerException {
             try {
                 return solrCore.request(request);
-            } catch (IOException e) {
+            } catch (Exception e) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 logger.log(Level.WARNING, "Could not issue Solr request. ", e); //NON-NLS
                 throw new SolrServerException(
                         NbBundle.getMessage(this.getClass(), "Server.request.exception.exception.msg"), e);
@@ -1474,26 +1583,108 @@ public class Server {
         }
 
         private void commit() throws SolrServerException {
+            List<SolrInputDocument> clone;
+            synchronized (bufferLock) {
+                // Make a clone and release the lock, so that we don't
+                // hold other ingest threads
+                clone = buffer.stream().collect(toList());
+                buffer.clear();
+            }
+
+            try {
+                sendBufferedDocs(clone);
+            } catch (KeywordSearchModuleException ex) {
+                throw new SolrServerException(NbBundle.getMessage(this.getClass(), "Server.commit.exception.msg"), ex);
+            }
+            
             try {
                 //commit and block
                 solrCore.commit(true, true);
-            } catch (IOException e) {
+            } catch (Exception e) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 logger.log(Level.WARNING, "Could not commit index. ", e); //NON-NLS
                 throw new SolrServerException(NbBundle.getMessage(this.getClass(), "Server.commit.exception.msg"), e);
             }
         }
 
+        private void deleteDataSource(Long dsObjId) throws IOException, SolrServerException {
+            String dataSourceId = Long.toString(dsObjId);
+            String deleteQuery = "image_id:" + dataSourceId;
+
+            solrCore.deleteByQuery(deleteQuery);
+        }
+
+        /**
+         * Add a Solr document for indexing. Documents get batched instead of
+         * being immediately sent to Solr (unless batch size = 1).
+         *
+         * @param doc Solr document to be indexed.
+         *
+         * @throws KeywordSearchModuleException
+         */
         void addDocument(SolrInputDocument doc) throws KeywordSearchModuleException {
+
+            List<SolrInputDocument> clone;
+            synchronized (bufferLock) {
+                buffer.add(doc);
+                // buffer documents if the buffer is not full
+                if (buffer.size() < maxBufferSize) {
+                    return;
+                }
+
+                // Buffer is full. Make a clone and release the lock, so that we don't
+                // hold other ingest threads
+                clone = buffer.stream().collect(toList());
+                buffer.clear();
+            }
+            
+            // send the cloned list to Solr
+            sendBufferedDocs(clone);
+        }
+        
+        /**
+         * Send a list of buffered documents to Solr.
+         *
+         * @param docBuffer List of buffered Solr documents
+         *
+         * @throws KeywordSearchModuleException
+         */
+        private void sendBufferedDocs(List<SolrInputDocument> docBuffer) throws KeywordSearchModuleException {
+            
+            if (docBuffer.isEmpty()) {
+                return;
+            }
+
             try {
-                solrCore.add(doc);
-            } catch (SolrServerException ex) {
-                logger.log(Level.SEVERE, "Could not add document to index via update handler: " + doc.getField("id"), ex); //NON-NLS
-                throw new KeywordSearchModuleException(
-                        NbBundle.getMessage(this.getClass(), "Server.addDoc.exception.msg", doc.getField("id")), ex); //NON-NLS
-            } catch (IOException ex) {
-                logger.log(Level.SEVERE, "Could not add document to index via update handler: " + doc.getField("id"), ex); //NON-NLS
-                throw new KeywordSearchModuleException(
-                        NbBundle.getMessage(this.getClass(), "Server.addDoc.exception.msg2", doc.getField("id")), ex); //NON-NLS
+                boolean success = true;
+                for (int reTryAttempt = 0; reTryAttempt < NUM_BATCH_UPDATE_RETRIES; reTryAttempt++) {
+                    try {
+                        success = true;
+                        solrCore.add(docBuffer);
+                    } catch (Exception ex) {
+                        success = false;
+                        if (reTryAttempt < NUM_BATCH_UPDATE_RETRIES - 1) {
+                            logger.log(Level.WARNING, "Unable to send document batch to Solr. Re-trying...", ex); //NON-NLS
+                            try {
+                                Thread.sleep(SLEEP_BETWEEN_RETRIES_MS);
+                            } catch (InterruptedException ignore) {
+                                throw new KeywordSearchModuleException(
+                                        NbBundle.getMessage(this.getClass(), "Server.addDocBatch.exception.msg"), ex); //NON-NLS
+                            }
+                        }                        
+                    }
+                    if (success) {
+                        if (reTryAttempt > 0) {
+                            logger.log(Level.INFO, "Batch update suceeded after {0} re-try", reTryAttempt); //NON-NLS
+                        }
+                        return;
+                    }
+                }
+                // if we are here, it means all re-try attempts failed
+                logger.log(Level.SEVERE, "Unable to send document batch to Solr. All re-try attempts failed!"); //NON-NLS
+                throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.addDocBatch.exception.msg")); //NON-NLS
+            } finally {
+                docBuffer.clear();
             }
         }
 
@@ -1504,7 +1695,8 @@ public class Server {
          * @param chunkID   Chunk ID of the Solr document
          *
          * @return Text from matching Solr document (as String). Null if no
-         * matching Solr document found or error while getting content from Solr
+         *         matching Solr document found or error while getting content
+         *         from Solr
          */
         private String getSolrContent(long contentID, int chunkID) {
             final SolrQuery q = new SolrQuery();
@@ -1533,7 +1725,8 @@ public class Server {
                         }
                     }
                 }
-            } catch (SolrServerException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 logger.log(Level.SEVERE, "Error getting content from Solr. Solr document id " + contentID + ", chunk id " + chunkID + ", query: " + filterQuery, ex); //NON-NLS
                 return null;
             }
@@ -1542,6 +1735,11 @@ public class Server {
         }
 
         synchronized void close() throws KeywordSearchModuleException {
+
+            // stop the periodic batch update task. If the task is already running, 
+            // allow it to finish.
+            ThreadUtils.shutDownTaskExecutor(periodicTasksExecutor);
+
             // We only unload cores for "single-user" cases.
             if (this.caseType == CaseType.MULTI_USER_CASE) {
                 return;
@@ -1549,12 +1747,10 @@ public class Server {
 
             try {
                 CoreAdminRequest.unloadCore(this.name, currentSolrServer);
-            } catch (SolrServerException ex) {
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(
                         NbBundle.getMessage(this.getClass(), "Server.close.exception.msg"), ex);
-            } catch (IOException ex) {
-                throw new KeywordSearchModuleException(
-                        NbBundle.getMessage(this.getClass(), "Server.close.exception.msg2"), ex);
             }
         }
 

@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  *
- * Copyright 2012-2019 Basis Technology Corp.
+ * Copyright 2012-2020 Basis Technology Corp.
  *
  * Copyright 2012 42six Solutions.
  * Contact: aebadirad <at> 42six <dot> com
@@ -36,6 +36,7 @@ import java.util.logging.Level;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import org.apache.commons.io.FilenameUtils;
 import org.openide.modules.InstalledFileLocator;
 import org.openide.util.NbBundle;
 import org.sleuthkit.autopsy.coreutils.ExecUtil;
@@ -56,26 +57,41 @@ import org.xml.sax.SAXException;
 import java.nio.file.Path;
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.HashSet;
+import static java.util.Locale.US;
 import static java.util.TimeZone.getTimeZone;
 import org.openide.util.Lookup;
+import org.sleuthkit.autopsy.casemodule.Case;
+import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProgress;
 import org.sleuthkit.autopsy.ingest.IngestModule.IngestModuleException;
 import org.sleuthkit.autopsy.keywordsearchservice.KeywordSearchService;
 import org.sleuthkit.autopsy.recentactivity.ShellBagParser.ShellBag;
 import org.sleuthkit.datamodel.AbstractFile;
+import org.sleuthkit.datamodel.Account;
 import org.sleuthkit.datamodel.BlackboardArtifact;
+import static org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT;
+import static org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_OS_ACCOUNT;
 import org.sleuthkit.datamodel.BlackboardAttribute;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ASSOCIATED_ARTIFACT;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_COMMENT;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME;
 import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_ACCESSED;
 import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_CREATED;
 import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_MODIFIED;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DEVICE_ID;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_NAME;
 import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_USER_ID;
+import static org.sleuthkit.datamodel.BlackboardAttribute.ATTRIBUTE_TYPE.TSK_USER_NAME;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.ReadContentInputStream.ReadContentInputStreamException;
 import org.sleuthkit.datamodel.Report;
@@ -94,7 +110,16 @@ import org.sleuthkit.datamodel.TskDataException;
     "Progress_Message_Analyze_Registry=Analyzing Registry Files",
     "Shellbag_Artifact_Display_Name=Shell Bags",
     "Shellbag_Key_Attribute_Display_Name=Key",
-    "Shellbag_Last_Write_Attribute_Display_Name=Last Write"
+    "Shellbag_Last_Write_Attribute_Display_Name=Last Write",
+    "Recently_Used_Artifacts_Office_Trustrecords=Stored in TrustRecords because Office security exception was granted",
+    "Recently_Used_Artifacts_ArcHistory=Recently opened by 7Zip",
+    "Recently_Used_Artifacts_Applets=Recently opened according to Applets registry key",
+    "Recently_Used_Artifacts_Mmc=Recently opened according to Windows Management Console MRU",
+    "Recently_Used_Artifacts_Winrar=Recently opened according to WinRAR MRU",
+    "Recently_Used_Artifacts_Officedocs=Recently opened according to Office MRU",
+    "Recently_Used_Artifacts_Adobe=Recently opened according to Adobe MRU",
+    "Recently_Used_Artifacts_Mediaplayer=Recently opened according to Media Player MRU",
+    "Registry_System_Bam=Recently Executed according to Background Activity Moderator (BAM)"
 })
 class ExtractRegistry extends Extract {
 
@@ -131,6 +156,7 @@ class ExtractRegistry extends Extract {
     final private static UsbDeviceIdMapper USB_MAPPER = new UsbDeviceIdMapper();
     final private static String RIP_EXE = "rip.exe";
     final private static String RIP_PL = "rip.pl";
+    final private static String RIP_PL_INCLUDE_FLAG = "-I";
     final private static int MS_IN_SEC = 1000;
     final private static String NEVER_DATE = "Never";
     final private static String SECTION_DIVIDER = "-------------------------";
@@ -141,11 +167,12 @@ class ExtractRegistry extends Extract {
     private final Path rrFullHome; // Path to the full version of RegRipper
     private Content dataSource;
     private IngestJobContext context;
-    
+    private Map<String, String> userNameMap;
+
     private static final String SHELLBAG_ARTIFACT_NAME = "RA_SHELL_BAG"; //NON-NLS
     private static final String SHELLBAG_ATTRIBUTE_LAST_WRITE = "RA_SHELL_BAG_LAST_WRITE"; //NON-NLS
-    private static final String SHELLBAG_ATTRIBUTE_KEY= "RA_SHELL_BAG_KEY"; //NON-NLS
-    
+    private static final String SHELLBAG_ATTRIBUTE_KEY = "RA_SHELL_BAG_KEY"; //NON-NLS
+
     BlackboardArtifact.Type shellBagArtifactType = null;
     BlackboardAttribute.Type shellBagKeyAttributeType = null;
     BlackboardAttribute.Type shellBagLastWriteAttributeType = null;
@@ -193,8 +220,12 @@ class ExtractRegistry extends Extract {
                 throw new IngestModuleException("perl not found in your system");
             }
             rrCmd.add(perl);
+            rrCmd.add(RIP_PL_INCLUDE_FLAG);
+            rrCmd.add(rrHome.toString());
             rrCmd.add(rrPath);
             rrFullCmd.add(perl);
+            rrFullCmd.add(RIP_PL_INCLUDE_FLAG);
+            rrFullCmd.add(rrFullHome.toString());
             rrFullCmd.add(rrFullPath);
         }
     }
@@ -206,13 +237,23 @@ class ExtractRegistry extends Extract {
         List<AbstractFile> allRegistryFiles = new ArrayList<>();
         org.sleuthkit.autopsy.casemodule.services.FileManager fileManager = currentCase.getServices().getFileManager();
 
+        // find the sam hives', process this first so we can map the user id's and sids for later use
+        try {
+            allRegistryFiles.addAll(fileManager.findFiles(dataSource, "sam", "/system32/config")); //NON-NLS
+        } catch (TskCoreException ex) {
+            String msg = NbBundle.getMessage(this.getClass(),
+                    "ExtractRegistry.findRegFiles.errMsg.errReadingFile", "sam");
+            logger.log(Level.WARNING, msg, ex);
+            this.addErrorMessage(this.getName() + ": " + msg);
+        }
+
         // find the user-specific ntuser-dat files
         try {
             allRegistryFiles.addAll(fileManager.findFiles(dataSource, "ntuser.dat")); //NON-NLS
         } catch (TskCoreException ex) {
             logger.log(Level.WARNING, "Error fetching 'ntuser.dat' file."); //NON-NLS
         }
-        
+
         // find the user-specific ntuser-dat files
         try {
             allRegistryFiles.addAll(fileManager.findFiles(dataSource, "usrclass.dat")); //NON-NLS
@@ -221,7 +262,7 @@ class ExtractRegistry extends Extract {
         }
 
         // find the system hives'
-        String[] regFileNames = new String[]{"system", "software", "security", "sam"}; //NON-NLS
+        String[] regFileNames = new String[]{"system", "software", "security"}; //NON-NLS
         for (String regFileName : regFileNames) {
             try {
                 allRegistryFiles.addAll(fileManager.findFiles(dataSource, regFileName, "/system32/config")); //NON-NLS
@@ -310,9 +351,14 @@ class ExtractRegistry extends Extract {
                     try {
                         List<ShellBag> shellbags = ShellBagParser.parseShellbagOutput(regOutputFiles.fullPlugins);
                         createShellBagArtifacts(regFile, shellbags);
+                        createRecentlyUsedArtifacts(regOutputFiles.fullPlugins, regFile);
                     } catch (IOException | TskCoreException ex) {
                         logger.log(Level.WARNING, String.format("Unable to get shell bags from file %s", regOutputFiles.fullPlugins), ex);
                     }
+                } else if (regFileNameLocal.toLowerCase().contains("system") && parseSystemPluginOutput(regOutputFiles.fullPlugins, regFile) == false) {
+                    this.addErrorMessage(
+                            NbBundle.getMessage(this.getClass(), "ExtractRegistry.analyzeRegFiles.failedParsingResults",
+                                    this.getName(), regFileName));
                 }
                 try {
                     Report report = currentCase.addReport(regOutputFiles.fullPlugins,
@@ -371,7 +417,7 @@ class ExtractRegistry extends Extract {
             fullType = "sam"; //NON-NLS
         } else if (regFilePath.toLowerCase().contains("security")) { //NON-NLS
             fullType = "security"; //NON-NLS
-        }else if (regFilePath.toLowerCase().contains("usrclass")) { //NON-NLS
+        } else if (regFilePath.toLowerCase().contains("usrclass")) { //NON-NLS
             fullType = "usrclass"; //NON-NLS
         } else {
             return regOutputFiles;
@@ -394,8 +440,29 @@ class ExtractRegistry extends Extract {
             String errFilePath = outFilePathBase + "-full.err.txt"; //NON-NLS
             logger.log(Level.INFO, "Writing Full RegRipper results to: {0}", regOutputFiles.fullPlugins); //NON-NLS
             executeRegRipper(rrFullCmd, rrFullHome, regFilePath, fullType, regOutputFiles.fullPlugins, errFilePath);
+            try {
+                scanErrorLogs(errFilePath);
+            } catch (IOException ex) {
+                logger.log(Level.SEVERE, String.format("Unable to run RegRipper on %s", regFilePath), ex); //NON-NLS
+                this.addErrorMessage(NbBundle.getMessage(this.getClass(), "ExtractRegistry.execRegRip.errMsg.failedAnalyzeRegFile", this.getName(), regFilePath));
+            }
         }
         return regOutputFiles;
+    }
+
+    private void scanErrorLogs(String errFilePath) throws IOException {
+        File regfile = new File(errFilePath);
+        try (BufferedReader reader = new BufferedReader(new FileReader(regfile))) {
+            String line = reader.readLine();
+            while (line != null) {
+                line = line.trim();
+                if (line.toLowerCase().contains("error") || line.toLowerCase().contains("@inc")) {
+                    logger.log(Level.WARNING, "Regripper file {0} contains errors from run", errFilePath); //NON-NLS
+
+                }
+                line = reader.readLine();
+            }
+        }
     }
 
     private void executeRegRipper(List<String> regRipperPath, Path regRipperHomeDir, String hiveFilePath, String hiveFileType, String outputFile, String errFile) {
@@ -413,10 +480,10 @@ class ExtractRegistry extends Extract {
             processBuilder.directory(regRipperHomeDir.toFile()); // RegRipper 2.8 has to be run from its own directory
             processBuilder.redirectOutput(new File(outputFile));
             processBuilder.redirectError(new File(errFile));
-            ExecUtil.execute(processBuilder, new DataSourceIngestModuleProcessTerminator(context));
+            ExecUtil.execute(processBuilder, new DataSourceIngestModuleProcessTerminator(context, true));
         } catch (IOException ex) {
-            logger.log(Level.SEVERE, "Unable to run RegRipper", ex); //NON-NLS
-            this.addErrorMessage(NbBundle.getMessage(this.getClass(), "ExtractRegistry.execRegRip.errMsg.failedAnalyzeRegFile", this.getName()));
+            logger.log(Level.SEVERE, String.format("Error running RegRipper on %s", hiveFilePath), ex); //NON-NLS
+            this.addErrorMessage(NbBundle.getMessage(this.getClass(), "ExtractRegistry.execRegRip.errMsg.failedAnalyzeRegFile", this.getName(), hiveFilePath));
         }
     }
 
@@ -448,7 +515,7 @@ class ExtractRegistry extends Extract {
             String stringdoc = startdoc + result + enddoc;
             DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
             Document doc = builder.parse(new InputSource(new StringReader(stringdoc)));
-            
+
             // cycle through the elements in the doc
             Element oroot = doc.getDocumentElement();
             NodeList children = oroot.getChildNodes();
@@ -682,33 +749,33 @@ class ExtractRegistry extends Extract {
                                         break;
                                     case "usb": //NON-NLS
                                         try {
-                                            Long usbMtime = Long.parseLong(artnode.getAttribute("mtime")); //NON-NLS
-                                            usbMtime = Long.valueOf(usbMtime.toString());
+                                        Long usbMtime = Long.parseLong(artnode.getAttribute("mtime")); //NON-NLS
+                                        usbMtime = Long.valueOf(usbMtime.toString());
 
-                                            BlackboardArtifact bbart = regFile.newArtifact(ARTIFACT_TYPE.TSK_DEVICE_ATTACHED);
-                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME, parentModuleName, usbMtime));
-                                            String dev = artnode.getAttribute("dev"); //NON-NLS
-                                            String make = "";
-                                            String model = dev;
-                                            if (dev.toLowerCase().contains("vid")) { //NON-NLS
-                                                USBInfo info = USB_MAPPER.parseAndLookup(dev);
-                                                if (info.getVendor() != null) {
-                                                    make = info.getVendor();
-                                                }
-                                                if (info.getProduct() != null) {
-                                                    model = info.getProduct();
-                                                }
+                                        BlackboardArtifact bbart = regFile.newArtifact(ARTIFACT_TYPE.TSK_DEVICE_ATTACHED);
+                                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME, parentModuleName, usbMtime));
+                                        String dev = artnode.getAttribute("dev"); //NON-NLS
+                                        String make = "";
+                                        String model = dev;
+                                        if (dev.toLowerCase().contains("vid")) { //NON-NLS
+                                            USBInfo info = USB_MAPPER.parseAndLookup(dev);
+                                            if (info.getVendor() != null) {
+                                                make = info.getVendor();
                                             }
-                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DEVICE_MAKE, parentModuleName, make));
-                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DEVICE_MODEL, parentModuleName, model));
-                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DEVICE_ID, parentModuleName, value));
-                                            bbart.addAttributes(bbattributes);
-
-                                            newArtifacts.add(bbart);
-                                        } catch (TskCoreException ex) {
-                                            logger.log(Level.SEVERE, "Error adding device attached artifact to blackboard.", ex); //NON-NLS
+                                            if (info.getProduct() != null) {
+                                                model = info.getProduct();
+                                            }
                                         }
-                                        break;
+                                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DEVICE_MAKE, parentModuleName, make));
+                                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DEVICE_MODEL, parentModuleName, model));
+                                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DEVICE_ID, parentModuleName, value));
+                                        bbart.addAttributes(bbattributes);
+
+                                        newArtifacts.add(bbart);
+                                    } catch (TskCoreException ex) {
+                                        logger.log(Level.SEVERE, "Error adding device attached artifact to blackboard.", ex); //NON-NLS
+                                    }
+                                    break;
                                     case "uninstall": //NON-NLS
                                         Long itemMtime = null;
                                         try {
@@ -769,70 +836,70 @@ class ExtractRegistry extends Extract {
 
                                     case "ProfileList": //NON-NLS
                                         try {
-                                            String homeDir = value;
-                                            String sid = artnode.getAttribute("sid"); //NON-NLS
-                                            String username = artnode.getAttribute("username"); //NON-NLS
-                                            BlackboardArtifact bbart = null;
-                                            try {
-                                                //check if any of the existing artifacts match this username
-                                                ArrayList<BlackboardArtifact> existingArtifacts = currentCase.getSleuthkitCase().getBlackboardArtifacts(ARTIFACT_TYPE.TSK_OS_ACCOUNT);
-                                                for (BlackboardArtifact artifact : existingArtifacts) {
-                                                    if (artifact.getDataSource().getId() == regFile.getDataSourceObjectId()) {
-                                                        BlackboardAttribute attribute = artifact.getAttribute(new BlackboardAttribute.Type(ATTRIBUTE_TYPE.TSK_USER_ID));
-                                                        if (attribute != null && attribute.getValueString().equals(sid)) {
-                                                            bbart = artifact;
-                                                            break;
-                                                        }
+                                        String homeDir = value;
+                                        String sid = artnode.getAttribute("sid"); //NON-NLS
+                                        String username = artnode.getAttribute("username"); //NON-NLS
+                                        BlackboardArtifact bbart = null;
+                                        try {
+                                            //check if any of the existing artifacts match this username
+                                            ArrayList<BlackboardArtifact> existingArtifacts = currentCase.getSleuthkitCase().getBlackboardArtifacts(ARTIFACT_TYPE.TSK_OS_ACCOUNT);
+                                            for (BlackboardArtifact artifact : existingArtifacts) {
+                                                if (artifact.getDataSource().getId() == regFile.getDataSourceObjectId()) {
+                                                    BlackboardAttribute attribute = artifact.getAttribute(new BlackboardAttribute.Type(ATTRIBUTE_TYPE.TSK_USER_ID));
+                                                    if (attribute != null && attribute.getValueString().equals(sid)) {
+                                                        bbart = artifact;
+                                                        break;
                                                     }
                                                 }
-                                            } catch (TskCoreException ex) {
-                                                logger.log(Level.SEVERE, "Error getting existing os account artifact", ex);
                                             }
-                                            if (bbart == null) {
-                                                //create new artifact
-                                                bbart = regFile.newArtifact(ARTIFACT_TYPE.TSK_OS_ACCOUNT);
+                                        } catch (TskCoreException ex) {
+                                            logger.log(Level.SEVERE, "Error getting existing os account artifact", ex);
+                                        }
+                                        if (bbart == null) {
+                                            //create new artifact
+                                            bbart = regFile.newArtifact(ARTIFACT_TYPE.TSK_OS_ACCOUNT);
+                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_NAME,
+                                                    parentModuleName, username));
+                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_ID,
+                                                    parentModuleName, sid));
+                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PATH,
+                                                    parentModuleName, homeDir));
+                                        } else {
+                                            //add attributes to existing artifact
+                                            BlackboardAttribute bbattr = bbart.getAttribute(new BlackboardAttribute.Type(ATTRIBUTE_TYPE.TSK_USER_NAME));
+
+                                            if (bbattr == null) {
                                                 bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_NAME,
                                                         parentModuleName, username));
-                                                bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_ID,
-                                                        parentModuleName, sid));
+                                            }
+                                            bbattr = bbart.getAttribute(new BlackboardAttribute.Type(ATTRIBUTE_TYPE.TSK_PATH));
+                                            if (bbattr == null) {
                                                 bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PATH,
                                                         parentModuleName, homeDir));
-                                            } else {
-                                                //add attributes to existing artifact
-                                                BlackboardAttribute bbattr = bbart.getAttribute(new BlackboardAttribute.Type(ATTRIBUTE_TYPE.TSK_USER_NAME));
-
-                                                if (bbattr == null) {
-                                                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_NAME,
-                                                            parentModuleName, username));
-                                                }
-                                                bbattr = bbart.getAttribute(new BlackboardAttribute.Type(ATTRIBUTE_TYPE.TSK_PATH));
-                                                if (bbattr == null) {
-                                                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PATH,
-                                                            parentModuleName, homeDir));
-                                                }
                                             }
-                                            bbart.addAttributes(bbattributes);
-                                            newArtifacts.add(bbart);
-                                        } catch (TskCoreException ex) {
-                                            logger.log(Level.SEVERE, "Error adding account artifact to blackboard.", ex); //NON-NLS
                                         }
-                                        break;
+                                        bbart.addAttributes(bbattributes);
+                                        newArtifacts.add(bbart);
+                                    } catch (TskCoreException ex) {
+                                        logger.log(Level.SEVERE, "Error adding account artifact to blackboard.", ex); //NON-NLS
+                                    }
+                                    break;
 
                                     case "NtuserNetwork": // NON-NLS
                                         try {
-                                            String localPath = artnode.getAttribute("localPath"); //NON-NLS
-                                            String remoteName = value;
-                                            BlackboardArtifact bbart = regFile.newArtifact(ARTIFACT_TYPE.TSK_REMOTE_DRIVE);
-                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_LOCAL_PATH,
-                                                    parentModuleName, localPath));
-                                            bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_REMOTE_PATH,
-                                                    parentModuleName, remoteName));
-                                            bbart.addAttributes(bbattributes);
-                                            newArtifacts.add(bbart);
-                                        } catch (TskCoreException ex) {
-                                            logger.log(Level.SEVERE, "Error adding network artifact to blackboard.", ex); //NON-NLS
-                                        }
-                                        break;
+                                        String localPath = artnode.getAttribute("localPath"); //NON-NLS
+                                        String remoteName = value;
+                                        BlackboardArtifact bbart = regFile.newArtifact(ARTIFACT_TYPE.TSK_REMOTE_DRIVE);
+                                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_LOCAL_PATH,
+                                                parentModuleName, localPath));
+                                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_REMOTE_PATH,
+                                                parentModuleName, remoteName));
+                                        bbart.addAttributes(bbattributes);
+                                        newArtifacts.add(bbart);
+                                    } catch (TskCoreException ex) {
+                                        logger.log(Level.SEVERE, "Error adding network artifact to blackboard.", ex); //NON-NLS
+                                    }
+                                    break;
                                     case "SSID": // NON-NLS
                                         String adapter = artnode.getAttribute("adapter"); //NON-NLS
                                         try {
@@ -879,10 +946,120 @@ class ExtractRegistry extends Extract {
                 }
             } catch (IOException ex) {
             }
-            
+
             postArtifacts(newArtifacts);
         }
         return false;
+    }
+
+    private boolean parseSystemPluginOutput(String regfilePath, AbstractFile regAbstractFile) {
+        File regfile = new File(regfilePath);
+        try (BufferedReader reader = new BufferedReader(new FileReader(regfile))) {
+            String line = reader.readLine();
+            while (line != null) {
+                line = line.trim();
+
+                if (line.toLowerCase().matches("^bam v.*")) {
+                    parseBamKey(regAbstractFile, reader, Bundle.Registry_System_Bam());
+                } else if (line.toLowerCase().matches("^bthport v..*")) {
+                    parseBlueToothDevices(regAbstractFile, reader);
+                }
+                line = reader.readLine();
+            }
+            return true;
+        } catch (FileNotFoundException ex) {
+            logger.log(Level.WARNING, "Error finding the registry file.", ex); //NON-NLS
+        } catch (IOException ex) {
+            logger.log(Level.WARNING, "Error reading the system hive: {0}", ex); //NON-NLS
+        }
+
+        return false;
+
+    }
+
+    /**
+     * Create recently used artifacts to parse the regripper plugin output, this
+     * format is used in several diffent plugins
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseBlueToothDevices(AbstractFile regFile, BufferedReader reader) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        while ((line != null) && (!line.contains(SECTION_DIVIDER))) {
+            line = reader.readLine();
+
+            if (line != null) {
+                line = line.trim();
+            }
+
+            if ((line != null) && (line.toLowerCase().contains("device unique id"))) {
+                // Columns are seperated by colons :
+                // Data : Values
+                // Record is 4 lines in length (Device Unique Id, Name, Last Seen,  LastConnected
+                while (line != null && !line.contains(SECTION_DIVIDER) && !line.isEmpty() && !line.toLowerCase().contains("radio support not found")) {
+                    Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                    addBlueToothAttribute(line, attributes, TSK_DEVICE_ID);
+                    line = reader.readLine();
+                    // Name may not exist, check for it to make sure.
+                    if ((line != null) && (line.toLowerCase().contains("name"))) {
+                        addBlueToothAttribute(line, attributes, TSK_NAME);
+                        line = reader.readLine();
+                    }
+                    addBlueToothAttribute(line, attributes, TSK_DATETIME);
+                    line = reader.readLine();
+                    addBlueToothAttribute(line, attributes, TSK_DATETIME_ACCESSED);
+                    BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_BLUETOOTH_PAIRING, regFile, attributes);
+                    if (bba != null) {
+                        bbartifacts.add(bba);
+                    }
+                    // Read blank line between records then next read line is start of next block
+                    reader.readLine();
+                    line = reader.readLine();
+                }
+
+                if (line != null) {
+                    line = line.trim();
+                }
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    private void addBlueToothAttribute(String line, Collection<BlackboardAttribute> attributes, ATTRIBUTE_TYPE attributeType) {
+        if (line == null) {
+            return;
+        }
+
+        String tokens[] = line.split(": ");
+        if (tokens.length > 1 && !tokens[1].isEmpty()) {
+            String tokenString = tokens[1];
+            if (attributeType.getDisplayName().toLowerCase().contains("date")) {
+                String dateString = tokenString.toLowerCase().replace(" z", "");
+                // date format for plugin Tue Jun 23 10:27:54 2020 Z
+                SimpleDateFormat dateFormat = new SimpleDateFormat("EEE MMM d HH:mm:ss yyyy", US);
+                Long dateLong = Long.valueOf(0);
+                try {
+                    Date newDate = dateFormat.parse(dateString);
+                    dateLong = newDate.getTime() / 1000;
+                } catch (ParseException ex) {
+                    // catching error and displaying date that could not be parsed
+                    // we set the timestamp to 0 and continue on processing
+                    logger.log(Level.WARNING, String.format("Failed to parse date/time %s for Bluetooth Last Seen attribute.", dateString), ex); //NON-NLS
+                }
+                attributes.add(new BlackboardAttribute(attributeType, getName(), dateLong));
+            } else {
+                attributes.add(new BlackboardAttribute(attributeType, getName(), tokenString));
+            }
+        }
     }
 
     /**
@@ -932,18 +1109,28 @@ class ExtractRegistry extends Extract {
                         Map<String, String> userInfo = userInfoMap.remove(userID);
                         //if the existing user id matches a user id which we parsed information for check if that information exists and if it doesn't add it
                         if (userInfo != null) {
-                            osAccount.addAttributes(getAttributesForAccount(userInfo, groupMap.get(userID), true));
+                            osAccount.addAttributes(getAttributesForAccount(userInfo, groupMap.get(userID), true, regAbstractFile));
                         }
                     }
                 }
             }
-            
+
             //add remaining userinfos as accounts;
             for (Map<String, String> userInfo : userInfoMap.values()) {
                 BlackboardArtifact bbart = regAbstractFile.newArtifact(ARTIFACT_TYPE.TSK_OS_ACCOUNT);
-                bbart.addAttributes(getAttributesForAccount(userInfo, groupMap.get(userInfo.get(SID_KEY)), false));
+                bbart.addAttributes(getAttributesForAccount(userInfo, groupMap.get(userInfo.get(SID_KEY)), false, regAbstractFile));
                 // index the artifact for keyword search
                 newArtifacts.add(bbart);
+            }
+            // Get a mapping of user sids to user names and save globally so it can be used for other areas
+            // of the registry, ie: BAM key
+            try {
+                userNameMap = makeUserNameMap(dataSource);
+            } catch (TskCoreException ex) {
+                logger.log(Level.WARNING, "Unable to create OS Account user name map", ex);
+                // This is not the end of the world we will just continue without 
+                // user names
+                userNameMap = new HashMap<>();
             }
             return true;
         } catch (FileNotFoundException ex) {
@@ -962,16 +1149,16 @@ class ExtractRegistry extends Extract {
 
     /**
      * Creates the attribute list for the given user information and group list.
-     * 
-     * @param userInfo Map of key\value pairs of user information
-     * @param groupList List of the groups that user belongs
+     *
+     * @param userInfo     Map of key\value pairs of user information
+     * @param groupList    List of the groups that user belongs
      * @param existingUser
-     * 
-     * @return List 
-     * 
-     * @throws ParseException 
+     *
+     * @return List
+     *
+     * @throws ParseException
      */
-    Collection<BlackboardAttribute> getAttributesForAccount(Map<String, String> userInfo, List<String> groupList, boolean existingUser) throws ParseException {
+    Collection<BlackboardAttribute> getAttributesForAccount(Map<String, String> userInfo, List<String> groupList, boolean existingUser, AbstractFile regAbstractFile) throws ParseException {
         Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
 
         SimpleDateFormat regRipperTimeFormat = new SimpleDateFormat("EEE MMM dd HH:mm:ss yyyy 'Z'");
@@ -1023,6 +1210,20 @@ class ExtractRegistry extends Extract {
 
         value = userInfo.get(INTERNET_NAME_KEY);
         if (value != null && !value.isEmpty()) {
+            try {
+                // Create an account for this email, if it doesn't already exist.
+                Case.getCurrentCaseThrows()
+                        .getSleuthkitCase()
+                        .getCommunicationsManager()
+                        .createAccountFileInstance(Account.Type.EMAIL,
+                                value, getRAModuleName(), regAbstractFile);
+            } catch (NoCurrentCaseException | TskCoreException ex) {
+                logger.log(Level.SEVERE,
+                        String.format("Error adding email account with value "
+                                + "%s, to the case database for file %s [objId=%d]",
+                                value, regAbstractFile.getName(), regAbstractFile.getId()), ex);
+            }
+
             bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_EMAIL,
                     getRAModuleName(), value));
         }
@@ -1102,7 +1303,7 @@ class ExtractRegistry extends Extract {
 
         return bbattributes;
     }
-    
+
     /**
      * Read the User Information section of the SAM regripper plugin's output
      * and collect user account information from the file.
@@ -1150,8 +1351,559 @@ class ExtractRegistry extends Extract {
             line = bufferedReader.readLine();
         }
     }
-    
-   
+
+    /**
+     * Create recently used artifacts from NTUSER regripper files
+     *
+     * @param regFileName name of the regripper output file
+     *
+     * @param regFile     registry file the artifact is associated with
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void createRecentlyUsedArtifacts(String regFileName, AbstractFile regFile) throws FileNotFoundException, IOException {
+        File regfile = new File(regFileName);
+        try (BufferedReader reader = new BufferedReader(new FileReader(regfile))) {
+            String line = reader.readLine();
+            while (line != null) {
+                line = line.trim();
+
+                if (line.matches("^adoberdr v.*")) {
+                    parseAdobeMRUList(regFile, reader, Bundle.Recently_Used_Artifacts_Adobe());
+                } else if (line.matches("^mpmru v.*")) {
+                    parseMediaPlayerMRUList(regFile, reader, Bundle.Recently_Used_Artifacts_Mediaplayer());
+                } else if (line.matches("^trustrecords v.*")) {
+                    parseOfficeTrustRecords(regFile, reader, Bundle.Recently_Used_Artifacts_Office_Trustrecords());
+                } else if (line.matches("^ArcHistory:")) {
+                    parse7ZipMRU(regFile, reader, Bundle.Recently_Used_Artifacts_ArcHistory());
+                } else if (line.matches("^applets v.*")) {
+                    parseGenericMRUList(regFile, reader, Bundle.Recently_Used_Artifacts_Applets());
+                } else if (line.matches("^mmc v.*")) {
+                    parseGenericMRUList(regFile, reader, Bundle.Recently_Used_Artifacts_Mmc());
+                } else if (line.matches("^winrar v.*")) {
+                    parseWinRARMRUList(regFile, reader, Bundle.Recently_Used_Artifacts_Winrar());
+                } else if (line.matches("^officedocs2010 v.*")) {
+                    parseOfficeDocs2010MRUList(regFile, reader, Bundle.Recently_Used_Artifacts_Officedocs());
+                }
+                line = reader.readLine();
+            }
+        }
+    }
+
+    /**
+     * Create artifacts from BAM Regripper Plugin records
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseBamKey(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        // Read thru first bam output to get to second bam output which is the same but delimited
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+            line = line.trim();
+        }
+        line = reader.readLine();
+        line = line.trim();
+        while (!line.contains(SECTION_DIVIDER)) {
+            // Split the line into it parts based on delimiter of "|"
+            // 1570493613|BAM|||\Device\HarddiskVolume3\Program Files\TechSmith\Snagit 2018\Snagit32.exe (S-1-5-21-3042408413-2583535980-1301764466-1001)
+            String tokens[] = line.split("\\|");
+            Long progRunDateTime = Long.valueOf(tokens[0]);
+            // Split on " (S-" as this signifies a User SID, if S- not used then may have issues becuase of (x86) in path is valid.
+            // We can add the S- back to the string that we split on since S- is a valid beginning of a User SID
+            String fileNameSid[] = tokens[4].split("\\s+\\(S-");
+            String userSid = "S-" + fileNameSid[1].substring(0, fileNameSid[1].length() - 1);
+            String userName = userNameMap.get(userSid);
+            if (userName == null) {
+                userName = userSid;
+            }
+            String fileName = fileNameSid[0];
+            if (fileName.startsWith("\\Device\\HarddiskVolume")) {
+                // Start at point past the 2nd slash
+                int fileNameStart = fileName.indexOf('\\', 16);
+                fileName = fileName.substring(fileNameStart, fileName.length());
+
+            }
+            Collection<BlackboardAttribute> attributes = new ArrayList<>();
+            attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PROG_NAME, getName(), fileName));
+            attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_NAME, getName(), userName));
+            attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME, getName(), progRunDateTime));
+            attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_COMMENT, getName(), comment));
+            BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_PROG_RUN, regFile, attributes);
+            if (bba != null) {
+                bbartifacts.add(bba);
+                bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                if (bba != null) {
+                    bbartifacts.add(bba);
+                }
+            }
+            line = reader.readLine();
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts from adobemru Regripper Plugin records
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseAdobeMRUList(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        SimpleDateFormat adobePluginDateFormat = new SimpleDateFormat("yyyyMMddHHmmssZ", US);
+        Long adobeUsedTime = Long.valueOf(0);
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+            line = line.trim();
+            if (line.matches("^Key name,file name,sDate,uFileSize,uPageCount")) {
+                line = reader.readLine();
+                // Columns are
+                // Key name, file name, sDate, uFileSize, uPageCount
+                while (!line.contains(SECTION_DIVIDER)) {
+                    // Split csv line, handles double quotes around individual file names
+                    // since file names can contain commas
+                    String tokens[] = line.split(",(?=([^\"]*\"[^\"]*\")*[^\"]*$)");
+                    String fileName = tokens[1].substring(0, tokens[1].length() - 1);
+                    fileName = fileName.replace("\"", "");
+                    if (fileName.charAt(0) == '/') {
+                        fileName = fileName.substring(1, fileName.length() - 1);
+                        fileName = fileName.replaceFirst("/", ":/");
+                    }
+                    // Check to see if more then 2 tokens, Date may not be populated, will default to 0
+                    if (tokens.length > 2) {
+                        // Time in the format of 20200131104456-05'00'
+                        try {
+                            String fileUsedTime = tokens[2].replaceAll("'", "");
+                            Date usedDate = adobePluginDateFormat.parse(fileUsedTime);
+                            adobeUsedTime = usedDate.getTime() / 1000;
+                        } catch (ParseException ex) {
+                            // catching error and displaying date that could not be parsed
+                            // we set the timestamp to 0 and continue on processing
+                            logger.log(Level.WARNING, String.format("Failed to parse date/time %s for adobe file artifact.", tokens[2]), ex); //NON-NLS
+                        }
+                    }
+                    Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                    attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+                    attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME, getName(), adobeUsedTime));
+                    attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+                    BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+                    if (bba != null) {
+                        bbartifacts.add(bba);
+                        fileName = fileName.replace("\0", "");
+                        bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                        if (bba != null) {
+                            bbartifacts.add(bba);
+                        }
+                    }
+                    line = reader.readLine();
+                }
+                line = line.trim();
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts to parse the Media Player MRU regripper
+     * (mpmru) records
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseMediaPlayerMRUList(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+            line = line.trim();
+            if (line.contains("LastWrite")) {
+                line = reader.readLine();
+                // Columns are
+                // FileX -> <Media file>
+                while (!line.contains(SECTION_DIVIDER) && !line.contains("RecentFileList has no values.")) {
+                    // Split line on "> " which is the record delimiter between position and file
+                    String tokens[] = line.split("> ");
+                    String fileName = tokens[1];
+                    Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                    attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+                    attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+                    BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+                    if (bba != null) {
+                        bbartifacts.add(bba);
+                        bba = createAssociatedArtifact(fileName, bba);
+                        if (bba != null) {
+                            bbartifacts.add(bba);
+                            bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                            if (bba != null) {
+                                bbartifacts.add(bba);
+                            }
+                        }
+                    }
+                    line = reader.readLine();
+                }
+                line = line.trim();
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts to parse the regripper plugin output, this
+     * format is used in several diffent plugins
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseGenericMRUList(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+            line = line.trim();
+            if (line.contains("LastWrite")) {
+                line = reader.readLine();
+                // Columns are
+                // FileX -> <file>
+                while (!line.contains(SECTION_DIVIDER) && !line.isEmpty() && !line.contains("Applets")
+                        && !line.contains(("Recent File List"))) {
+                    // Split line on "> " which is the record delimiter between position and file
+                    String tokens[] = line.split("> ");
+                    String fileName = tokens[1];
+                    Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                    attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+                    attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+                    BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+                    if (bba != null) {
+                        bbartifacts.add(bba);
+                        bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                        if (bba != null) {
+                            bbartifacts.add(bba);
+                        }
+                    }
+                    line = reader.readLine();
+                }
+                line = line.trim();
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts to parse the WinRAR Regripper plugin
+     * output
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseWinRARMRUList(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+            line = line.trim();
+            if (line.contains("LastWrite")) {
+                line = reader.readLine();
+                // Columns are
+                // FileX -> <Media file>
+                if (!line.isEmpty()) {
+                    while (!line.contains(SECTION_DIVIDER)) {
+                        // Split line on "> " which is the record delimiter between position and file
+                        String tokens[] = line.split("> ");
+                        String fileName = tokens[1];
+                        Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                        attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+                        attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+                        BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+                        if (bba != null) {
+                            bbartifacts.add(bba);
+                            bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                            if (bba != null) {
+                                bbartifacts.add(bba);
+                            }
+                        }
+                        line = reader.readLine();
+                    }
+                }
+                line = line.trim();
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts to parse the runmru ArcHistory (7Zip)
+     * regripper plugin records
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parse7ZipMRU(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        line = line.trim();
+        if (!line.contains("PathHistory:")) {
+            while (!line.contains("PathHistory:") && !line.isEmpty()) {
+                // Columns are
+                // <fileName>
+                String fileName = line;
+                Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+                attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+                BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+                if (bba != null) {
+                    bbartifacts.add(bba);
+                    bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                    if (bba != null) {
+                        bbartifacts.add(bba);
+                    }
+                }
+                line = reader.readLine();
+                line = line.trim();
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts to parse the Office Documents 2010 records
+     * Regripper Plugin output
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseOfficeDocs2010MRUList(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        String line = reader.readLine();
+        line = line.trim();
+        // Reading to the SECTION DIVIDER to get next section of records to process.  Dates appear to have
+        // multiple spaces in them that makes it harder to parse so next section will be easier to parse 
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+        }
+        line = reader.readLine();
+        while (!line.contains(SECTION_DIVIDER)) {
+            // record has the following format
+            // 1294283922|REG|||OfficeDocs2010 - F:\Windows_time_Rules_xp.doc
+            String tokens[] = line.split("\\|");
+            Long docDate = Long.valueOf(tokens[0]);
+            String fileNameTokens[] = tokens[4].split(" - ");
+            String fileName = fileNameTokens[1];
+            Collection<BlackboardAttribute> attributes = new ArrayList<>();
+            attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+            attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME, getName(), docDate));
+            attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+            BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+            if (bba != null) {
+                bbartifacts.add(bba);
+                bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                if (bba != null) {
+                    bbartifacts.add(bba);
+                }
+            }
+            line = reader.readLine();
+            line = line.trim();
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create recently used artifacts to parse the Office trust records
+     * (trustrecords) Regipper plugin records
+     *
+     * @param regFile registry file the artifact is associated with
+     *
+     * @param reader  buffered reader to parse adobemru records
+     *
+     * @param comment string that will populate attribute TSK_COMMENT
+     *
+     * @throws FileNotFound and IOException
+     */
+    private void parseOfficeTrustRecords(AbstractFile regFile, BufferedReader reader, String comment) throws FileNotFoundException, IOException {
+        String userProfile = regFile.getParentPath();
+        userProfile = userProfile.substring(0, userProfile.length() - 1);
+        List<BlackboardArtifact> bbartifacts = new ArrayList<>();
+        SimpleDateFormat pluginDateFormat = new SimpleDateFormat("EEE MMM dd HH:mm:ss yyyy", US);
+        Long usedTime = Long.valueOf(0);
+        String line = reader.readLine();
+        while (!line.contains(SECTION_DIVIDER)) {
+            line = reader.readLine();
+            line = line.trim();
+            usedTime = Long.valueOf(0);
+            if (!line.contains("**") && !line.contains("----------") && !line.contains("LastWrite")
+                    && !line.contains(SECTION_DIVIDER) && !line.isEmpty() && !line.contains("TrustRecords")) {
+                // Columns are
+                // Date : <File Name>/<Website>
+                // Split line on " : " which is the record delimiter between position and file
+                String fileName = null;
+                String tokens[] = line.split(" : ");
+                fileName = tokens[1];
+                fileName = fileName.replace("%USERPROFILE%", userProfile);
+                // Time in the format of Wed May 31 14:33:03 2017 Z 
+                try {
+                    String fileUsedTime = tokens[0].replaceAll(" Z", "");
+                    Date usedDate = pluginDateFormat.parse(fileUsedTime);
+                    usedTime = usedDate.getTime() / 1000;
+                } catch (ParseException ex) {
+                    // catching error and displaying date that could not be parsed
+                    // we set the timestamp to 0 and continue on processing
+                    logger.log(Level.WARNING, String.format("Failed to parse date/time %s for TrustRecords artifact.", tokens[0]), ex); //NON-NLS
+                }
+                Collection<BlackboardAttribute> attributes = new ArrayList<>();
+                attributes.add(new BlackboardAttribute(TSK_PATH, getName(), fileName));
+                attributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME, getName(), usedTime));
+                attributes.add(new BlackboardAttribute(TSK_COMMENT, getName(), comment));
+                BlackboardArtifact bba = createArtifactWithAttributes(ARTIFACT_TYPE.TSK_RECENT_OBJECT, regFile, attributes);
+                if (bba != null) {
+                    bbartifacts.add(bba);
+                    bba = createAssociatedArtifact(FilenameUtils.normalize(fileName, true), bba);
+                    if (bba != null) {
+                        bbartifacts.add(bba);
+                    }
+                }
+                line = line.trim();
+            }
+        }
+        if (!bbartifacts.isEmpty()) {
+            postArtifacts(bbartifacts);
+        }
+    }
+
+    /**
+     * Create associated artifacts using file name and path and the artifact it
+     * associates with
+     *
+     * @param filePathName file and path of object being associated with
+     *
+     * @param bba          blackboard artifact to associate with
+     *
+     * @returnv BlackboardArtifact or a null value
+     */
+    private BlackboardArtifact createAssociatedArtifact(String filePathName, BlackboardArtifact bba) {
+        org.sleuthkit.autopsy.casemodule.services.FileManager fileManager = currentCase.getServices().getFileManager();
+        String fileName = FilenameUtils.getName(filePathName);
+        String filePath = FilenameUtils.getPath(filePathName);
+        List<AbstractFile> sourceFiles;
+        try {
+            sourceFiles = fileManager.findFiles(dataSource, fileName, filePath); //NON-NLS
+            if (!sourceFiles.isEmpty()) {
+                for (AbstractFile sourceFile : sourceFiles) {
+                    if (sourceFile.getParentPath().endsWith(filePath)) {
+                        Collection<BlackboardAttribute> bbattributes2 = new ArrayList<>();
+                        bbattributes2.addAll(Arrays.asList(
+                                new BlackboardAttribute(TSK_ASSOCIATED_ARTIFACT, this.getName(),
+                                        bba.getArtifactID())));
+
+                        BlackboardArtifact associatedObjectBba = createArtifactWithAttributes(TSK_ASSOCIATED_OBJECT, sourceFile, bbattributes2);
+                        if (associatedObjectBba != null) {
+                            return associatedObjectBba;
+                        }
+                    }
+                }
+            }
+        } catch (TskCoreException ex) {
+            // only catching the error and displaying the message as the file may not exist on the 
+            // system anymore
+            logger.log(Level.WARNING, String.format("Error finding actual file %s. file may not exist", filePathName)); //NON-NLS
+        }
+
+        return null;
+    }
+
+    /**
+     * Create a map of userids to usernames from the OS Accounts.
+     *
+     * @param dataSource
+     *
+     * @return A Map of userIDs and userNames
+     *
+     * @throws TskCoreException
+     */
+    private Map<String, String> makeUserNameMap(Content dataSource) throws TskCoreException {
+        Map<String, String> userNameMap = new HashMap<>();
+
+        List<BlackboardArtifact> accounts = blackboard.getArtifacts(TSK_OS_ACCOUNT.getTypeID(), dataSource.getId());
+
+        for (BlackboardArtifact account : accounts) {
+            BlackboardAttribute nameAttribute = getAttributeForArtifact(account, TSK_USER_NAME);
+            BlackboardAttribute idAttribute = getAttributeForArtifact(account, TSK_USER_ID);
+
+            String userName = nameAttribute != null ? nameAttribute.getDisplayString() : "";
+            String userID = idAttribute != null ? idAttribute.getDisplayString() : "";
+
+            if (!userID.isEmpty()) {
+                userNameMap.put(userID, userName);
+            }
+        }
+
+        return userNameMap;
+    }
+
+    /**
+     * Gets the attribute for the given type from the given artifact.
+     *
+     * @param artifact BlackboardArtifact to get the attribute from
+     * @param type     The BlackboardAttribute Type to get
+     *
+     * @return BlackboardAttribute for given artifact and type
+     *
+     * @throws TskCoreException
+     */
+    private BlackboardAttribute getAttributeForArtifact(BlackboardArtifact artifact, BlackboardAttribute.ATTRIBUTE_TYPE type) throws TskCoreException {
+        return artifact.getAttribute(new BlackboardAttribute.Type(BlackboardAttribute.ATTRIBUTE_TYPE.fromID(type.getTypeID())));
+    }
+
     /**
      * Create the shellbag artifacts from the list of ShellBag objects.
      *
@@ -1162,7 +1914,7 @@ class ExtractRegistry extends Extract {
      */
     void createShellBagArtifacts(AbstractFile regFile, List<ShellBag> shellbags) throws TskCoreException {
         List<BlackboardArtifact> artifacts = new ArrayList<>();
-        try{
+        try {
             for (ShellBag bag : shellbags) {
                 Collection<BlackboardAttribute> attributes = new ArrayList<>();
                 BlackboardArtifact artifact = regFile.newArtifact(getShellBagArtifact().getTypeID());
@@ -1210,8 +1962,8 @@ class ExtractRegistry extends Extract {
     private BlackboardArtifact.Type getShellBagArtifact() throws TskCoreException {
         if (shellBagArtifactType == null) {
             shellBagArtifactType = tskCase.getArtifactType(SHELLBAG_ARTIFACT_NAME);
-            
-            if(shellBagArtifactType == null) {
+
+            if (shellBagArtifactType == null) {
                 try {
                     tskCase.addBlackboardArtifactType(SHELLBAG_ARTIFACT_NAME, Bundle.Shellbag_Artifact_Display_Name()); //NON-NLS
                 } catch (TskDataException ex) {
@@ -1237,9 +1989,9 @@ class ExtractRegistry extends Extract {
     private BlackboardAttribute.Type getLastWriteAttribute() throws TskCoreException {
         if (shellBagLastWriteAttributeType == null) {
             try {
-                shellBagLastWriteAttributeType = tskCase.addArtifactAttributeType(SHELLBAG_ATTRIBUTE_LAST_WRITE, 
-                                                    BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.DATETIME, 
-                                                    Bundle.Shellbag_Last_Write_Attribute_Display_Name());
+                shellBagLastWriteAttributeType = tskCase.addArtifactAttributeType(SHELLBAG_ATTRIBUTE_LAST_WRITE,
+                        BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.DATETIME,
+                        Bundle.Shellbag_Last_Write_Attribute_Display_Name());
             } catch (TskDataException ex) {
                 // Attribute already exists get it from the case
                 shellBagLastWriteAttributeType = tskCase.getAttributeType(SHELLBAG_ATTRIBUTE_LAST_WRITE);
@@ -1259,9 +2011,9 @@ class ExtractRegistry extends Extract {
     private BlackboardAttribute.Type getKeyAttribute() throws TskCoreException {
         if (shellBagKeyAttributeType == null) {
             try {
-                shellBagKeyAttributeType = tskCase.addArtifactAttributeType(SHELLBAG_ATTRIBUTE_KEY, 
-                                                    BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.STRING, 
-                                                    Bundle.Shellbag_Key_Attribute_Display_Name());
+                shellBagKeyAttributeType = tskCase.addArtifactAttributeType(SHELLBAG_ATTRIBUTE_KEY,
+                        BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.STRING,
+                        Bundle.Shellbag_Key_Attribute_Display_Name());
             } catch (TskDataException ex) {
                 // The attribute already exists get it from the case
                 shellBagKeyAttributeType = tskCase.getAttributeType(SHELLBAG_ATTRIBUTE_KEY);
@@ -1269,15 +2021,15 @@ class ExtractRegistry extends Extract {
         }
         return shellBagKeyAttributeType;
     }
-    
-        /**
+
+    /**
      * Maps the user groups to the sid that are a part of them.
-     * 
+     *
      * @param bufferedReader
-     * 
+     *
      * @return A map if sid and the groups they map too
-     * 
-     * @throws IOException 
+     *
+     * @throws IOException
      */
     Map<String, List<String>> readGroups(BufferedReader bufferedReader) throws IOException {
         Map<String, List<String>> groupMap = new HashMap<>();
@@ -1292,7 +2044,7 @@ class ExtractRegistry extends Extract {
             if (line.contains("Group Name")) {
                 String value = line.replaceAll("Group Name\\s*?:", "").trim();
                 groupName = (value.replaceAll("\\[\\d*?\\]", "")).trim();
-                int startIndex = value.indexOf('[');
+                int startIndex = value.indexOf(" [") + 1; 
                 int endIndex = value.indexOf(']');
 
                 if (startIndex != -1 && endIndex != -1) {
@@ -1320,12 +2072,11 @@ class ExtractRegistry extends Extract {
     }
 
     /**
-     * Gets the key value from user account strings of the format
-     * key:value or 
+     * Gets the key value from user account strings of the format key:value or
      * --> value
-     * 
+     *
      * @param line String to parse
-     * 
+     *
      * @return key value pair
      */
     private Map.Entry<String, String> getSAMKeyValue(String line) {

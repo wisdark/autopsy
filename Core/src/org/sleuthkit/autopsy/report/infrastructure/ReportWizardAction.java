@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  *
- * Copyright 2012-2019 Basis Technology Corp.
+ * Copyright 2012-2020 Basis Technology Corp.
  *
  * Copyright 2012 42six Solutions.
  * Contact: aebadirad <at> 42six <dot> com
@@ -31,7 +31,9 @@ import java.awt.event.ActionListener;
 import java.beans.PropertyChangeEvent;
 import java.text.MessageFormat;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.logging.Level;
 import javax.swing.ImageIcon;
@@ -52,13 +54,15 @@ import org.openide.windows.WindowManager;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.core.RuntimeProperties;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.autopsy.report.GeneralReportSettings;
+import org.sleuthkit.autopsy.report.ReportModule;
 
 @ActionID(category = "Tools", id = "org.sleuthkit.autopsy.report.infrastructure.ReportWizardAction")
 @ActionRegistration(displayName = "#CTL_ReportWizardAction", lazy = false)
 @ActionReferences(value = {
     @ActionReference(path = "Menu/Tools", position = 301, separatorAfter = 399)
     ,
-    @ActionReference(path = "Toolbars/Case", position = 105)})
+    @ActionReference(path = "Toolbars/Case", position = 106)})
 public final class ReportWizardAction extends CallableSystemAction implements Presenter.Toolbar, ActionListener {
 
     private static final Logger logger = Logger.getLogger(ReportWizardAction.class.getName());
@@ -101,9 +105,10 @@ public final class ReportWizardAction extends CallableSystemAction implements Pr
             if (runReports) {
                 // generate reports in a separate thread
                 panel = new ReportGenerationPanel();
+                Map<String, ReportModule> modules = (Map<String, ReportModule>) wiz.getProperty("modules");
                 ReportGenerator generator = new ReportGenerator(configName, panel); //NON-NLS
                 ReportWorker worker = new ReportWorker(() -> {
-                    generator.generateReports();
+                    generator.generateReports(modules);
                 });
                 worker.execute();
                 generator.displayProgressPanel();
@@ -115,8 +120,25 @@ public final class ReportWizardAction extends CallableSystemAction implements Pr
     private static void saveReportingConfiguration(String configName, WizardDescriptor wiz) throws ReportConfigException {
 
         ReportingConfig reportingConfig = new ReportingConfig(configName);
-        reportingConfig.setFileReportSettings((FileReportSettings) wiz.getProperty("fileReportSettings"));
-        reportingConfig.setTableReportSettings((TableReportSettings) wiz.getProperty("tableReportSettings"));
+        List<Long> selectedDataSourceIds = (List<Long>) wiz.getProperty("dataSourceSelections");
+        
+        // Set the selected data source ids.
+        FileReportSettings fileSettings = (FileReportSettings) wiz.getProperty("fileReportSettings");
+        TableReportSettings tableSettings = (TableReportSettings) wiz.getProperty("tableReportSettings");
+        GeneralReportSettings generalSettings = new GeneralReportSettings();
+        if(selectedDataSourceIds != null) {
+            generalSettings.setSelectedDataSources(selectedDataSourceIds);
+            if(fileSettings != null) {
+                fileSettings.setSelectedDataSources(selectedDataSourceIds);
+            }
+            if(tableSettings != null) {
+                tableSettings.setSelectedDataSources(selectedDataSourceIds);
+            }
+        }
+        
+        reportingConfig.setFileReportSettings(fileSettings);
+        reportingConfig.setTableReportSettings(tableSettings);
+        reportingConfig.setGeneralReportSettings(generalSettings);
 
         Map<String, ReportModuleConfig> moduleConfigs = (Map<String, ReportModuleConfig>) wiz.getProperty("moduleConfigs");
 
@@ -181,6 +203,21 @@ public final class ReportWizardAction extends CallableSystemAction implements Pr
         toolbarButton.setIcon(icon);
         toolbarButton.setText(NbBundle.getMessage(this.getClass(), "ReportWizardAction.toolBarButton.text"));
         return toolbarButton;
+    }
+    
+    /**
+     * Returns a set of the existing report profile names, removing the special
+     * named ReportAction.
+     *
+     * @return A set of user configurable report profiles, empty list is
+     *         returned if none were found.
+     */
+    public static Set<String> getReportConfigNames() {
+        Set<String> nameList = ReportingConfigLoader.getListOfReportConfigs();
+        //Remove this default name, users cannot change this report.
+        nameList.remove(REPORTING_CONFIGURATION_NAME);
+
+        return nameList;
     }
 
     /**

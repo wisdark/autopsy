@@ -1,3 +1,156 @@
+---------------- VERSION 4.17.0  --------------
+GUI:
+- Expanded the Data Source Summary panel to show recent activity, past cases, analysis results, etc.  Also made this available from the main UI when a data source is selected.
+- Expanded Discovery UI to support searching for and basic display of web domains.  It collapses the various web artifacts into a single view. 
+
+Ingest Modules:
+- Added iOS Analyzer module based on iLEAPP and a subset of its artifacts. 
+- New Picture Analyzer module that does EXIF extraction and HEIC conversion. HEIC/HEIF images are converted to JPEGs that retain EXIF using ImageMagick (replaces the previous EXIF ingest module).
+- Added support for the latest version of Edge browser that is based on Chromium into Recent Activity. Other Chromium-based browsers are also supported. 
+- Updated the rules that search Web History artifacts for search queries.  Expanded module to support multiple search engines for ambiguous URLs.
+- Bluetooth pairing artifacts are created based on RegRipper output.
+- Prefetch artifacts record the full path of exes.
+- PhotoRec module allows you to include or exclude specific file types.
+- Upgraded to Tika 1.23.
+
+Performance:
+- Documents are added to Solr in batches instead of one by one. 
+- More efficient queries to find WAL files for SQLite databases. 
+- Use a local drive for temp files for multi-user cases instead of the shared folder. 
+
+Command Line
+- Command line support for report profiles.
+- Restored support for Windows file type association for opening a case in Autopsy by double clicking case metadata (.aut) file.
+- Better feedback for command line argument errors.
+
+Misc:
+- Updated versions of libvmdk, libvhdi, and libewf.
+- Persona UI fixes: Pre-populate account and changed order of New Persona dialog.
+- Streaming ingest support added to auto ingest.
+- Recent Activity module processes now use the global timeout.
+- Option to include Autopsy executable in portable case (Windows only.)
+- Upgraded to NetBeans 11 Rich Client Platform.
+- Added debug feature to save the stack trace on all threads. 
+
+
+---------------- VERSION 4.16.0  --------------
+Ingest:
+- Added streaming ingest capability for disk images that allow files to be analyzed as soon as they are added to the database. 
+- Changed backend code so that disk image-based files are added by Java code instead of C/C++ code. 
+
+Ingest Modules: 
+- Include Interesting File set rules for cloud storage, encryption, cryptocurrency and privacy programs.
+- Updated PhotoRec 7.1 and include 64-bit version.
+- Updated RegRipper in Recent Activity to 2.8
+- Create artifacts for Prefetch, Background Activity Monitor, and System Resource Usage. 
+- Support MBOX files greater than 2GB.
+- Document metadata is saved as explicit artifacts and added to the timeline. 
+- New “no change” hashset type that does not change status of file. 
+
+
+Central Repository / Personas:
+- Accounts in the Central Repository can be grouped together and associated with a digital persona.
+- All accounts are now stored in the Central Repository to support correlation and persona creation. 
+
+Content viewers:
+- Created artifact-specific viewers in the Results viewer for contact book and call log. 
+- Moved Message viewer to a Results sub-viewer and expanded to show accounts. 
+- Added Application sub-viewer for PDF files based on IcePDF.
+- Annotation viewer now includes comments from hash set hits.
+
+Geolocation Viewer:
+- Different data types now are displayed using different colors.
+- Track points in a track are now displayed as small, connected circles instead of full pins.
+- Filter panel shows only data sources with geo location data. 
+- Geolocation artifact points can be tagged and commented upon.
+
+File Discovery:
+- Changed UI to have more of a search flow and content viewer is hidden until an item is selected.
+
+Reports:
+- Can be generated for a single data source instead of the entire case. 
+- CASE / UCO report module now includes artifacts in addition to files. 
+- Added backend concept of Tag Sets to support Project Vic categories from different countries. 
+
+Performance: 
+- Add throttling of UI refreshes to ensure data is quickly displayed and the tree does not get backed up with requests. 
+- Improved efficiency of adding a data source with many orphan files.
+- Improved efficiency of loading file systems.
+- Jython interpreter is preloaded at application startup.
+
+Misc bug fixes and improvements:
+- Fixed bug from last release where hex content viewer text was no longer fixed width.
+- Altered locking to allow multiple data sources to be added at once more smoothly and to support batch inserts of file data.
+- Central repository comments will no longer store tag descriptions.
+- Account type nodes in the Accounts tree show counts.
+- Full time stamps displayed for messages in ingest inbox.
+- More detailed status during file exports.
+- Improved efficiency of adding timeline events.
+- Fixed bug with CVT most recent filter.
+- Improved documentation and support for running on Linux/macOS.
+
+---------------- VERSION 4.15.0  --------------
+New UI Features:
+- Added Document view to File Discovery.
+- Expanded Context Content Viewer to show if an app accessed a file.
+- Added translation feature to Message Content Viewer.
+- Added waypoint type filter to the Geolocation viewer.
+- Added zoom feature to Indexed Text Content Viewer.
+
+New Ingest Modules Features:
+- New GPX ingest module.
+- New Drone ingest module for DJI drones based on DatCon. 
+- Create artifacts for files opened by Adobe Reader, Windows Media Player, Office Docs (Most Recently Used (MRU) and TrustRecords), 7Zip MRU, WinRAR MRU, Applets, Microsoft Management Console (MMC) via RegRipper.
+
+New Central Repository Features:
+- Central Repository stores account IDs that were previously seen. 
+- Central Repository is enabled by default to store past hashes.  Feature to flag previously seen files is disabled by default. 
+
+Other New Features:
+- Multi-user cases can be created via command line
+
+Bug fixes:
+- Prevent entire application from crashing when gstreamer crashes on videos.
+- Improve Geolocation viewer with large data sets.
+- Fix error with non-sector aligned reads on local disks.
+- Times from Recycle Bin files are now in timeline.
+- Validate timeline events and ignore events too far in the future.
+- Moved some database queries off of UI thread.
+- Remove hard coded sizes from UI that cause issues with other languages.
+
+---------------- VERSION 4.14.0  --------------
+Specialized UIs:
+- New File Discovery UI that allows you to search and filter for certain types of files. 
+- New Map viewer that uses either Bing (when online) or offline map tiles. 
+- Communications UI shows country names for phone numbers and fixed bug in summary panel. 
+- Fixed bugs in timeline filtering. 
+- Refactored backend timeline filtering code based on The Sleuth Kit datamodel changes to remove JavaFX dependency. 
+
+Data Sources:
+- Added limited support for APFS disk images.  Does not include encrypted volumes or ones that span multiple disks.   Uses contribution to The Sleuth Kit from Blackbag Technologies. 
+- New data source processor that parses “XRY File Exports”. 
+
+Content Viewers:
+- Added a new “Context” viewer to show where a file came from.  Currently shows what message a file was attached to or what URL a file was downloaded from. 
+- Added support to seek and change playback speed for videos in “Application” viewer.
+- Improved support for Unicode HTML files in “Application” viewer.
+- Added support for webp image files in “Application” viewer.
+
+Ingest Modules:
+- Keyword Search module uses Decodetect statistical encoding detection for plain text files. Fixes issues with incorrect detection of Japanese files. 
+- Embedded File Extractor module uses statistical analysis to determine encoding of file names in ZIP files. Fixes issues with ZIP files created on Windows Japanese computers. 
+- Solr (Keyword Search module) now uses Japanese-specific tokenization using Kuromoji. 
+- Fixed Shellbags module in RegRipper (used by Autopsy Recent Activity module) to fix parsing errors. 
+- Plaso module no longer generates an error if enabled for non-disk image data sources.  
+- Added support for message attachments that are stored as an external file system file. Expanded Email and Android modules to use this technique. 
+
+General:
+- Fixed crashes by gstreamer when a video is selected.
+- Added initial capability to delete a data source from a case (excludes data in the CR).
+- Changed behavior of portable case menu item to automatically open the case and warn if it was already unpacked. 
+- Fixed bug that caused issues when case metadata had Unicode values. 
+- Added new Attachment APIs to the CommunicationsArtifactHelper class to support attachments stored as external file system files. 
+
 ---------------- VERSION 4.13.0  --------------
 General:
 - Switch from Oracle JDK to OpenJDK.

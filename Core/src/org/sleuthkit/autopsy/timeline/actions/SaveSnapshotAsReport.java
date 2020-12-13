@@ -109,10 +109,12 @@ public class SaveSnapshotAsReport extends Action {
                 
                 String reportName = JOptionPane.showInputDialog(SwingUtilities.windowForComponent(controller.getTopComponent()), message, 
                         Bundle.SaveSnapShotAsReport_action_dialogs_title(), JOptionPane.QUESTION_MESSAGE);
+                // if reportName is null then cancel was selected, if reportName is empty then ok was selected and no report name specified
+                if (reportName != null) {
+                    reportName = StringUtils.defaultIfBlank(reportName, defaultReportName);
                 
-                reportName = StringUtils.defaultIfBlank(reportName, defaultReportName);
-                
-                createReport(controller, reportName, generationDate, snapshot);
+                    createReport(controller, reportName, generationDate, snapshot);
+                }
             });
         });
     }
@@ -137,7 +139,7 @@ public class SaveSnapshotAsReport extends Action {
             reportMainFilePath = new SnapShotReportWriter(currentCase,
                     reportFolderPath,
                     reportName,
-                    controller.getEventsModel().getZoomState(),
+                    controller.getEventsModel().getModelParams(),
                     generationDate, snapshot).writeReport();
         } catch (IOException ex) {
             LOGGER.log(Level.SEVERE, "Error writing report to disk at " + reportFolderPath, ex); //NON_NLS

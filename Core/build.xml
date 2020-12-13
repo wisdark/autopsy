@@ -48,10 +48,30 @@
         <copy todir="${basedir}/release/gstreamer" >
             <fileset dir="${thirdparty.dir}/gstreamer"/>
         </copy>
+        
+        <!--Copy iLeapp to release-->
+        <copy todir="${basedir}/release/iLeapp" >
+            <fileset dir="${thirdparty.dir}/iLeapp"/>
+        </copy>
 		
         <!--Copy 7-Zip to release-->
         <copy todir="${basedir}/release/7-Zip" >
             <fileset dir="${thirdparty.dir}/7-Zip"/>
+        </copy>
+
+        <!--Copy InterestingFileSetRules to release-->
+        <copy todir="${basedir}/release/InterestingFileSetRules" >
+            <fileset dir="${thirdparty.dir}/InterestingFileSetRules"/>
+        </copy>
+
+        <!--Copy OfficialHashSets to release-->
+        <copy todir="${basedir}/release/OfficialHashSets" >
+            <fileset dir="${thirdparty.dir}/OfficialHashSets"/>
+        </copy>
+        
+        <!--Copy ImageMagick to release-->
+        <copy todir="${basedir}/release/ImageMagick-7.0.10-27-portable-Q16-x64" >
+            <fileset dir="${thirdparty.dir}/ImageMagick-7.0.10-27-portable-Q16-x64"/>
         </copy>
 
         <!-- The 'libgstlibav.dll' file is too big to store on GitHub, so we
@@ -72,8 +92,12 @@
         <copy file="${thirdparty.dir}/sevenzip/sevenzipjbinding.jar" todir="${ext.dir}" />
         <copy file="${thirdparty.dir}/sevenzip/sevenzipjbinding-AllPlatforms.jar" todir="${ext.dir}" />
         <copy file="${thirdparty.dir}/stix/StixLib.jar" todir="${ext.dir}" />
+        <copy todir="${ext.dir}">
+            <fileset dir="${thirdparty.dir}/IcePDF 6.2.2/"/> 
+        </copy>
         <copy file="${thirdparty.dir}/jdom/jdom-2.0.5.jar" todir="${ext.dir}" />
         <copy file="${thirdparty.dir}/jdom/jdom-2.0.5-contrib.jar" todir="${ext.dir}" />
+		<copy file="${thirdparty.dir}/DatCon/3.6.9/DatCon.jar" todir="${ext.dir}" />
     </target>
     
     
@@ -90,18 +114,20 @@
     
     <target name="getTSKJars" depends="findTSK">
         <property environment="env"/>
-        <copy file="${env.TSK_HOME}/bindings/java/dist/sleuthkit-postgresql-${TSK_VERSION}.jar" 
-              tofile="${ext.dir}/sleuthkit-postgresql-${TSK_VERSION}.jar"/>
+        <copy file="${env.TSK_HOME}/bindings/java/dist/sleuthkit-${TSK_VERSION}.jar" 
+              tofile="${ext.dir}/sleuthkit-${TSK_VERSION}.jar"/>
         <copy file="${env.TSK_HOME}/bindings/java/lib/sqlite-jdbc-3.25.2.jar"
               tofile="${ext.dir}/sqlite-jdbc-3.25.2.jar"/>
-        <copy file="${env.TSK_HOME}/bindings/java/lib/postgresql-9.4.1211.jre7.jar" 
+		<copy file="${env.TSK_HOME}/bindings/java/lib/postgresql-9.4.1211.jre7.jar" 
               tofile="${ext.dir}/postgresql-9.4.1211.jre7.jar"/>
         <copy file="${env.TSK_HOME}/bindings/java/lib/mchange-commons-java-0.2.9.jar"
               tofile="${ext.dir}/mchange-commons-java-0.2.9.jar"/>
         <copy file="${env.TSK_HOME}/bindings/java/lib/c3p0-0.9.5.jar"
               tofile="${ext.dir}/c3p0-0.9.5.jar"/>
         <copy file="${env.TSK_HOME}/bindings/java/lib/SparseBitSet-1.1.jar"
-                      tofile="${ext.dir}/SparseBitSet-1.1.jar"/>	  
+                      tofile="${ext.dir}/SparseBitSet-1.1.jar"/>	
+        <copy file="${env.TSK_HOME}/case-uco/java/dist/sleuthkit-caseuco-${TSK_VERSION}.jar" 
+              tofile="${ext.dir}/sleuthkit-caseuco-${TSK_VERSION}.jar"/>  
     </target>
 
     <target name="download-binlist">
@@ -137,7 +163,7 @@
 
     </target>
 
-    <target name="get-deps" depends="init-ivy,getTSKJars,get-thirdparty-dependencies,get-InternalPythonModules, download-binlist,getTestDataFiles">
+    <target name="get-deps" depends="init-ivy,getTSKJars,get-thirdparty-dependencies,get-InternalPythonModules, download-binlist">
         <mkdir dir="${ext.dir}"/>
         <copy file="${thirdparty.dir}/LICENSE-2.0.txt" todir="${ext.dir}" />        
         <!-- fetch all the dependencies from Ivy and stick them in the right places -->

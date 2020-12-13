@@ -1,7 +1,7 @@
 """
 Autopsy Forensic Browser
 
-Copyright 2019 Basis Technology Corp.
+Copyright 2019-2020 Basis Technology Corp.
 Contact: carrier <at> sleuthkit <dot> org
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +45,9 @@ from org.sleuthkit.datamodel import Account
 from org.sleuthkit.datamodel.blackboardutils import CommunicationArtifactsHelper
 from org.sleuthkit.datamodel.blackboardutils.CommunicationArtifactsHelper import MessageReadStatus
 from org.sleuthkit.datamodel.blackboardutils.CommunicationArtifactsHelper import CommunicationDirection
+from org.sleuthkit.datamodel.blackboardutils.attributes import MessageAttachments
+from org.sleuthkit.datamodel.blackboardutils.attributes.MessageAttachments import FileAttachment
+from org.sleuthkit.datamodel.blackboardutils.attributes.MessageAttachments import URLAttachment
 from TskMessagesParser import TskMessagesParser
 from TskContactsParser import TskContactsParser
 from TskCallLogsParser import TskCallLogsParser
@@ -151,7 +154,7 @@ class WhatsAppAnalyzer(general.AndroidComponentAnalyzer):
                         current_case.getSleuthkitCase(), self._PARSER_NAME,
                         calllog_and_message_db.getDBFile(), Account.Type.WHATSAPP)
                 self.parse_calllogs(calllog_and_message_db, helper)
-                self.parse_messages(dataSource, calllog_and_message_db, helper)
+                self.parse_messages(dataSource, calllog_and_message_db, helper, current_case)
 
         except NoCurrentCaseException as ex:
             #If there is no current case, bail out immediately.
@@ -169,14 +172,22 @@ class WhatsAppAnalyzer(general.AndroidComponentAnalyzer):
         try:
             contacts_parser = WhatsAppContactsParser(contacts_db, self._PARSER_NAME)
             while contacts_parser.next():
-                helper.addContact( 
-                    contacts_parser.get_contact_name(), 
-                    contacts_parser.get_phone(),
-                    contacts_parser.get_home_phone(),
-                    contacts_parser.get_mobile_phone(),
-                    contacts_parser.get_email(),
-                    contacts_parser.get_other_attributes()
-                )
+                name = contacts_parser.get_contact_name()
+                phone = contacts_parser.get_phone()
+                home_phone = contacts_parser.get_home_phone()
+                mobile_phone = contacts_parser.get_mobile_phone()
+                email = contacts_parser.get_email()
+                other_attributes = contacts_parser.get_other_attributes()
+                # add contact if we have at least one valid phone/email
+                if phone or home_phone or mobile_phone or email or other_attributes:
+                    helper.addContact( 
+                        name, 
+                        phone,
+                        home_phone,
+                        mobile_phone,
+                        email,
+                        other_attributes
+                    )
             contacts_parser.close()
         except SQLException as ex:
             self._logger.log(Level.WARNING, "Error querying the whatsapp database for contacts.", ex)
@@ -227,24 +238,32 @@ class WhatsAppAnalyzer(general.AndroidComponentAnalyzer):
                     "Error posting calllog artifact to the blackboard.", ex)
             self._logger.log(Level.WARNING, traceback.format_exc())
 
-    def parse_messages(self, dataSource, messages_db, helper):
+    def parse_messages(self, dataSource, messages_db, helper, current_case):
         try:
             messages_db.attachDatabase(dataSource, "wa.db",
                         messages_db.getDBFile().getParentPath(), "wadb")
 
             messages_parser = WhatsAppMessagesParser(messages_db)
             while messages_parser.next():
-                helper.addMessage(
-                    messages_parser.get_message_type(),
-                    messages_parser.get_message_direction(),
-                    messages_parser.get_phone_number_from(),
-                    messages_parser.get_phone_number_to(),
-                    messages_parser.get_message_date_time(),
-                    messages_parser.get_message_read_status(),
-                    messages_parser.get_message_subject(),
-                    messages_parser.get_message_text(),
-                    messages_parser.get_thread_id()
-                )
+                message_artifact = helper.addMessage(
+                                        messages_parser.get_message_type(),
+                                        messages_parser.get_message_direction(),
+                                        messages_parser.get_phone_number_from(),
+                                        messages_parser.get_phone_number_to(),
+                                        messages_parser.get_message_date_time(),
+                                        messages_parser.get_message_read_status(),
+                                        messages_parser.get_message_subject(),
+                                        messages_parser.get_message_text(),
+                                        messages_parser.get_thread_id()
+                                    )
+
+                # add attachments, if any
+                if (messages_parser.get_url_attachment() is not None):
+                    url_attachments = ArrayList()
+                    url_attachments.add(URLAttachment(messages_parser.get_url_attachment()))
+                    message_attachments = MessageAttachments([], url_attachments)
+                    helper.addAttachments(message_artifact, message_attachments)
+
             messages_parser.close()
         except SQLException as ex:
             self._logger.log(Level.WARNING, "Error querying the whatsapp database for contacts.", ex)
@@ -415,13 +434,23 @@ class WhatsAppContactsParser(TskContactsParser):
         return self.result_set.getString("name")
 
     def get_phone(self):
-        return self.result_set.getString("number")
+        number = self.result_set.getString("number")
+        return (number if general.isValidPhoneNumber(number) else None)
 
+    def get_email(self):
+        # occasionally the 'number' column may have an email address instead
+        value = self.result_set.getString("number")
+        return (value if general.isValidEmailAddress(value) else None)
+        
     def get_other_attributes(self):
-        return [BlackboardAttribute(
+        value = self.result_set.getString("jid")
+        if value:
+            return [BlackboardAttribute(
                     BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ID, 
                     self._PARENT_ANALYZER, 
-                    self.result_set.getString("jid"))]
+                    value)]
+        else:
+             return []
 
 class WhatsAppMessagesParser(TskMessagesParser):
     """
@@ -433,31 +462,28 @@ class WhatsAppMessagesParser(TskMessagesParser):
     def __init__(self, message_db):
         super(WhatsAppMessagesParser, self).__init__(message_db.runQuery(
                  """
-                     SELECT M.key_remote_jid  AS id, 
-                            contact_info.recipients, 
-                            key_from_me       AS direction, 
-                            CASE 
-		              WHEN M.data IS NULL THEN ""
-		              ELSE M.data 
-	                    END AS content,
-                            M.timestamp       AS send_timestamp, 
-                            M.received_timestamp, 
-                            M.remote_resource AS group_sender,
-                            M.media_url As attachment
-                     FROM   (SELECT jid, 
-                                    recipients 
-                             FROM   wadb.wa_contacts AS WC 
-                                    LEFT JOIN (SELECT gjid, 
-                                                      group_concat(CASE 
-                                                                     WHEN jid == "" THEN NULL
-                                                                     ELSE jid
-                                                                   END) AS recipients 
-                                               FROM   group_participants 
-                                               GROUP  BY gjid) AS group_map 
-                                           ON WC.jid = group_map.gjid 
-                             GROUP  BY jid) AS contact_info 
-                            JOIN messages AS M 
-                              ON M.key_remote_jid = contact_info.jid
+                    SELECT messages.key_remote_jid  AS id, 
+                           contact_book_w_groups.recipients, 
+                           key_from_me              AS direction, 
+                           messages.data            AS content, 
+                           messages.timestamp       AS send_timestamp, 
+                           messages.received_timestamp, 
+                           messages.remote_resource AS group_sender, 
+                           messages.media_url       AS attachment 
+                    FROM   (SELECT jid, 
+                                   recipients 
+                            FROM   wadb.wa_contacts AS contacts 
+                                   left join (SELECT gjid, 
+                                                     Group_concat(CASE 
+                                                                    WHEN jid == "" THEN NULL 
+                                                                    ELSE jid 
+                                                                  END) AS recipients 
+                                              FROM   group_participants 
+                                              GROUP  BY gjid) AS groups 
+                                          ON contacts.jid = groups.gjid 
+                            GROUP  BY jid) AS contact_book_w_groups 
+                           join messages 
+                             ON messages.key_remote_jid = contact_book_w_groups.jid
                  """
               )
         )
@@ -503,9 +529,8 @@ class WhatsAppMessagesParser(TskMessagesParser):
 
     def get_message_text(self):
         message = self.result_set.getString("content") 
-        attachment = self.result_set.getString("attachment")
-        if attachment is not None:
-            return general.appendAttachmentList(message, [attachment])
+        if message is None:
+            message = super(WhatsAppMessagesParser, self).get_message_text()
         return message
     
     def get_thread_id(self):
@@ -513,3 +538,14 @@ class WhatsAppMessagesParser(TskMessagesParser):
         if group is not None:
             return self.result_set.getString("id")
         return super(WhatsAppMessagesParser, self).get_thread_id()
+
+        
+    def get_url_attachment(self):
+        attachment = self.result_set.getString("attachment") 
+        if (attachment is None):
+            return None
+        elif (str(attachment).startswith("http:") or str(attachment).startswith("https:") ):
+            return attachment
+        else:
+            return None
+    

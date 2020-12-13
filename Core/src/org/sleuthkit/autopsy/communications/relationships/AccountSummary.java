@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2019 Basis Technology Corp.
+ * Copyright 2019-2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,16 +18,23 @@
  */
 package org.sleuthkit.autopsy.communications.relationships;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import org.sleuthkit.autopsy.coreutils.ImageUtils;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.Account;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardAttribute;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.TskCoreException;
+import org.sleuthkit.datamodel.blackboardutils.attributes.MessageAttachments.FileAttachment;
+import org.sleuthkit.datamodel.blackboardutils.attributes.MessageAttachments;
+import org.sleuthkit.datamodel.CommunicationsUtils;
+import org.sleuthkit.datamodel.InvalidAccountIDException;
+import org.sleuthkit.datamodel.blackboardutils.attributes.BlackboardJsonAttrUtil;
 
 /**
  * 
@@ -92,20 +99,27 @@ class AccountSummary {
                             
                             boolean isReference = false;
                             
-                            for (BlackboardAttribute attribute: attributes) {
+                            for (BlackboardAttribute attribute : attributes) {
+
                                 String attributeTypeName = attribute.getAttributeType().getTypeName();
                                 String attributeValue = attribute.getValueString();
-                                
-                                if (attributeTypeName.contains("PHONE")) {
-                                    attributeValue = RelationshipsNodeUtilities.normalizePhoneNum(attributeValue);
-                                } else if (attributeTypeName.contains("EMAIL")) {
-                                    attributeValue = RelationshipsNodeUtilities.normalizeEmailAddress(attributeValue);
+                                try {
+                                    if (attributeTypeName.contains("PHONE")) {
+                                        attributeValue = CommunicationsUtils.normalizePhoneNum(attributeValue);
+                                    } else if (attributeTypeName.contains("EMAIL")) {
+                                        attributeValue = CommunicationsUtils.normalizeEmailAddress(attributeValue);
+                                    }
+                                    
+                                    if (typeSpecificID.equals(attributeValue)) {
+                                        isReference = true;
+                                        break;
+                                    }
+                                } catch (InvalidAccountIDException ex) {
+                                    logger.log(Level.WARNING, String.format("Exception thrown "
+                                            + "in trying to normalize attribute value: %s",
+                                            attributeValue), ex); //NON-NLS
                                 }
-                                
-                                if ( typeSpecificID.equals(attributeValue) ) {
-                                    isReference = true;
-                                    break;
-                                }
+
                             }
                             if (isReference) {
                                 referenceCnt++;
@@ -121,10 +135,32 @@ class AccountSummary {
                 }
             }
             try {
-                attachmentCnt += artifact.getChildrenCount();
-                for (Content childContent : artifact.getChildren()) {
-                    if (ImageUtils.thumbnailSupported(childContent)) {
-                        mediaCnt++;
+                // count the attachments from the TSK_ATTACHMENTS attribute.
+                BlackboardAttribute attachmentsAttr = artifact.getAttribute(new BlackboardAttribute.Type(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ATTACHMENTS));
+                if (attachmentsAttr != null) {
+                    try {
+                        MessageAttachments msgAttachments = BlackboardJsonAttrUtil.fromAttribute(attachmentsAttr, MessageAttachments.class);
+                        Collection<FileAttachment> fileAttachments = msgAttachments.getFileAttachments();
+                        for (FileAttachment fileAttachment : fileAttachments) {
+                            attachmentCnt++;
+                            long attachedFileObjId = fileAttachment.getObjectId();
+                            if (attachedFileObjId >= 0) {
+                                AbstractFile attachedFile = artifact.getSleuthkitCase().getAbstractFileById(attachedFileObjId);
+                                if (ImageUtils.thumbnailSupported(attachedFile)) {
+                                    mediaCnt++;
+                                }  
+                            }
+                        }
+                    } 
+                    catch (BlackboardJsonAttrUtil.InvalidJsonException ex) {
+                        logger.log(Level.WARNING, String.format("Unable to parse json for MessageAttachments object in artifact: %s", artifact.getName()), ex);
+                    }                    
+                } else {  // backward compatibility - email message attachments are derived files, children of the message.
+                    attachmentCnt += artifact.getChildrenCount();
+                    for (Content childContent : artifact.getChildren()) {
+                        if (ImageUtils.thumbnailSupported(childContent)) {
+                            mediaCnt++;
+                        }
                     }
                 }
             } catch (TskCoreException ex) {
