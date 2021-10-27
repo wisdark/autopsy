@@ -27,9 +27,12 @@ import ezvcard.property.Organization;
 import ezvcard.property.Photo;
 import ezvcard.property.Telephone;
 import ezvcard.property.Url;
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -53,6 +56,7 @@ import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.Account;
 import org.sleuthkit.datamodel.AccountFileInstance;
 import org.sleuthkit.datamodel.Blackboard;
+import org.sleuthkit.datamodel.Blackboard.BlackboardException;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardAttribute;
 import org.sleuthkit.datamodel.Content;
@@ -143,7 +147,7 @@ final class VcardParser {
      * @throws NoCurrentCaseException If there is no open case.
      */
     void parse(AbstractFile abstractFile) throws IOException, NoCurrentCaseException {
-        for (VCard vcard: Ezvcard.parse(new ReadContentInputStream(abstractFile)).all()) {
+        for (VCard vcard: Ezvcard.parse(new InputStreamReader(new BufferedInputStream(new ReadContentInputStream(abstractFile)), StandardCharsets.UTF_8)).all()) {
             addContactArtifact(vcard, abstractFile);
         }
     }
@@ -222,10 +226,9 @@ final class VcardParser {
         try {
             // Create artifact if it doesn't already exist.
             if (!tskBlackboard.artifactExists(abstractFile, BlackboardArtifact.ARTIFACT_TYPE.TSK_CONTACT, attributes)) {
-                artifact = abstractFile.newArtifact(BlackboardArtifact.ARTIFACT_TYPE.TSK_CONTACT);
-                artifact.addAttributes(attributes);
+                artifact = abstractFile.newDataArtifact(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_CONTACT), attributes);
                 
-                 extractPhotos(vcard, abstractFile, artifact);
+                extractPhotos(vcard, abstractFile, artifact);
                 
                 // Add account relationships.
                 if (deviceAccountInstance != null) {
@@ -388,6 +391,9 @@ final class VcardParser {
         String telephoneText = telephone.getText();
        
         if (telephoneText == null || telephoneText.isEmpty()) {
+            if (telephone.getUri() == null) {
+                return;
+            }
             telephoneText =  telephone.getUri().getNumber();
             if (telephoneText == null || telephoneText.isEmpty()) {
                 return;
@@ -417,18 +423,20 @@ final class VcardParser {
                 }
 
                 try {
-                    BlackboardAttribute.Type attributeType = tskCase.getAttributeType(attributeTypeName);
+                    BlackboardAttribute.Type attributeType = tskCase.getBlackboard().getAttributeType(attributeTypeName);
                     if (attributeType == null) {
                         try{
                             // Add this attribute type to the case database.
-                            attributeType = tskCase.addArtifactAttributeType(attributeTypeName,
+                            attributeType = tskCase.getBlackboard().getOrAddAttributeType(attributeTypeName,
                                     BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.STRING,
                                     String.format("Phone Number (%s)", StringUtils.capitalize(splitType.toLowerCase())));
-                        }catch (TskDataException ex) {
-                            attributeType = tskCase.getAttributeType(attributeTypeName);
+                            
+                            ThunderbirdMboxFileIngestModule.addArtifactAttribute(telephoneText, attributeType, attributes);
+                        }catch (BlackboardException ex) {
+                            logger.log(Level.WARNING, String.format("Unable to retrieve attribute type '%s' for file '%s' (id=%d).", attributeTypeName, abstractFile.getName(), abstractFile.getId()), ex);
                         }
                     }
-                    ThunderbirdMboxFileIngestModule.addArtifactAttribute(telephoneText, attributeType, attributes);
+                    
                 } catch (TskCoreException ex) {
                     logger.log(Level.WARNING, String.format("Unable to retrieve attribute type '%s' for file '%s' (id=%d).", attributeTypeName, abstractFile.getName(), abstractFile.getId()), ex);
                 }
@@ -471,17 +479,17 @@ final class VcardParser {
                    attributeTypeName = "TSK_EMAIL";
                }
                try {
-                   BlackboardAttribute.Type attributeType = tskCase.getAttributeType(attributeTypeName);
+                   BlackboardAttribute.Type attributeType = tskCase.getBlackboard().getAttributeType(attributeTypeName);
                    if (attributeType == null) {
                        // Add this attribute type to the case database.
-                       attributeType = tskCase.addArtifactAttributeType(attributeTypeName, 
+                       attributeType = tskCase.getBlackboard().getOrAddAttributeType(attributeTypeName, 
                                BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.STRING, 
                                String.format("Email (%s)", StringUtils.capitalize(splitType.toLowerCase())));
                    }
                    ThunderbirdMboxFileIngestModule.addArtifactAttribute(email.getValue(), attributeType, attributes);
                } catch (TskCoreException ex) {
                    logger.log(Level.SEVERE, String.format("Unable to retrieve attribute type '%s' for file '%s' (id=%d).", attributeTypeName, abstractFile.getName(), abstractFile.getId()), ex);
-               } catch (TskDataException ex) {
+               } catch (BlackboardException ex) {
                    logger.log(Level.SEVERE, String.format("Unable to add custom attribute type '%s' for file '%s' (id=%d).", attributeTypeName, abstractFile.getName(), abstractFile.getId()), ex);
                }
            }  
@@ -500,6 +508,9 @@ final class VcardParser {
     private void addPhoneAccountInstances(Telephone telephone, AbstractFile abstractFile, Collection<AccountFileInstance> accountInstances) {
         String telephoneText = telephone.getText();
         if (telephoneText == null || telephoneText.isEmpty()) {
+            if (telephone.getUri() == null) {
+                return;
+            }
             telephoneText =  telephone.getUri().getNumber();
             if (telephoneText == null || telephoneText.isEmpty()) {
                 return;

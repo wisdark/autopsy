@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2019-2020 Basis Technology Corp.
+ * Copyright 2019-2021 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,12 +20,15 @@ package org.sleuthkit.autopsy.commandlineingest;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.sleuthkit.autopsy.coreutils.Logger;
 import org.netbeans.api.sendopts.CommandException;
 import org.netbeans.spi.sendopts.Env;
@@ -49,8 +52,7 @@ public class CommandLineOptionProcessor extends OptionProcessor {
     private final Option dataSourceObjectIdOption = Option.requiredArgument('i', "dataSourceObjectId");
     private final Option addDataSourceCommandOption = Option.withoutArgument('a', "addDataSource");
     private final Option caseDirOption = Option.requiredArgument('d', "caseDir");
-    private final Option runIngestCommandOption = Option.withoutArgument('r', "runIngest");
-    private final Option ingestProfileOption = Option.requiredArgument('p', "ingestProfile");
+    private final Option runIngestCommandOption = Option.optionalArgument('r', "runIngest");
     private final Option listAllDataSourcesCommandOption = Option.withoutArgument('l', "listAllDataSources");
     private final Option generateReportsOption = Option.optionalArgument('g', "generateReports");
     private final Option defaultArgument = Option.defaultArguments();
@@ -76,7 +78,6 @@ public class CommandLineOptionProcessor extends OptionProcessor {
         set.add(dataSourceObjectIdOption);
         set.add(caseDirOption);
         set.add(runIngestCommandOption);
-        set.add(ingestProfileOption);
         set.add(listAllDataSourcesCommandOption);
         set.add(generateReportsOption);
         set.add(defaultArgument);
@@ -205,21 +206,6 @@ public class CommandLineOptionProcessor extends OptionProcessor {
             }
         }
 
-        String ingestProfile = "";
-        if (values.containsKey(ingestProfileOption)) {
-
-            argDirs = values.get(ingestProfileOption);
-            if (argDirs.length < 1) {
-                handleError("Argument missing from 'ingestProfile' option");
-            }
-            ingestProfile = argDirs[0];
-
-            // verify inputs
-            if (ingestProfile == null || ingestProfile.isEmpty()) {
-                handleError("Missing argument 'ingestProfile'");
-            }
-        }
-
         // Create commands in order in which they should be executed:
         // First create the "CREATE_CASE" command, if present
         if (values.containsKey(createCaseCommandOption)) {
@@ -263,8 +249,14 @@ public class CommandLineOptionProcessor extends OptionProcessor {
             runFromCommandLine = true;
         }
 
+        String ingestProfile = "";
         // Add RUN_INGEST command, if present
         if (values.containsKey(runIngestCommandOption)) {
+
+            argDirs = values.get(runIngestCommandOption);
+            if(argDirs != null && argDirs.length > 0) {
+                ingestProfile = argDirs[0];
+            }
 
             // 'caseDir' must only be specified if the case is not being created during the current run
             if (!values.containsKey(createCaseCommandOption) && caseDir.isEmpty()) {
@@ -302,7 +294,6 @@ public class CommandLineOptionProcessor extends OptionProcessor {
         }
 
         // Add "GENERATE_REPORTS" command, if present
-        String reportProfile = null;
         if (values.containsKey(generateReportsOption)) {
 
             // 'caseDir' must only be specified if the case is not being created during the current run
@@ -311,24 +302,34 @@ public class CommandLineOptionProcessor extends OptionProcessor {
                 handleError("'caseDir' argument is empty");
             }
 
+            List<String> reportProfiles;
             argDirs = values.get(generateReportsOption);
             if (argDirs.length > 0) {
-                reportProfile = argDirs[0];
+                // use custom report configuration(s)
+                reportProfiles = Stream.of(argDirs[0].split(","))
+                .map(String::trim)
+                .collect(Collectors.toList());
+                
+                if (reportProfiles == null || reportProfiles.isEmpty()) {
+                    handleError("'generateReports' argument is empty");
+                }
+
+                for (String reportProfile : reportProfiles) {
+                    if (reportProfile.isEmpty()) {
+                        handleError("Empty report profile name");
+                    }
+                    CommandLineCommand newCommand = new CommandLineCommand(CommandLineCommand.CommandType.GENERATE_REPORTS);
+                    newCommand.addInputValue(CommandLineCommand.InputType.CASE_FOLDER_PATH.name(), caseDir);
+                    newCommand.addInputValue(CommandLineCommand.InputType.REPORT_PROFILE_NAME.name(), reportProfile);
+                    commands.add(newCommand);
+                }
+            } else {
+                // use default report configuration
+                CommandLineCommand newCommand = new CommandLineCommand(CommandLineCommand.CommandType.GENERATE_REPORTS);
+                newCommand.addInputValue(CommandLineCommand.InputType.CASE_FOLDER_PATH.name(), caseDir);
+                commands.add(newCommand);
             }
 
-            // If the user doesn't supply an options for generateReports the
-            // argsDirs length will be 0, so if reportProfile is empty
-            // something is not right.
-            if (reportProfile != null && reportProfile.isEmpty()) {
-                handleError("'generateReports' argument is empty");
-            }
-
-            CommandLineCommand newCommand = new CommandLineCommand(CommandLineCommand.CommandType.GENERATE_REPORTS);
-            newCommand.addInputValue(CommandLineCommand.InputType.CASE_FOLDER_PATH.name(), caseDir);
-            if (reportProfile != null) {
-                newCommand.addInputValue(CommandLineCommand.InputType.REPORT_PROFILE_NAME.name(), reportProfile);
-            }
-            commands.add(newCommand);
             runFromCommandLine = true;
         }
     }

@@ -198,14 +198,14 @@ final class PostgresCentralRepo extends RdbmsCentralRepo {
             if (connectionPool == null) {
                 setupConnectionPool();
             }
-        }
-        try {
-            return connectionPool.getConnection();
-        } catch (SQLException ex) {
-            throw new CentralRepoException("Error getting connection from connection pool.", Bundle.PostgresEamDb_connectionFailed_message(), ex); // NON-NLS
+            try {
+                return connectionPool.getConnection();
+            } catch (SQLException ex) {
+                throw new CentralRepoException("Error getting connection from connection pool.", Bundle.PostgresEamDb_connectionFailed_message(), ex); // NON-NLS
+            }
         }
     }
-
+    
     @Override
     protected String getConflictClause() {
         return CONFLICT_CLAUSE;
@@ -268,5 +268,6 @@ final class PostgresCentralRepo extends RdbmsCentralRepo {
         }
         return columnExists;
     }
+
 
 }

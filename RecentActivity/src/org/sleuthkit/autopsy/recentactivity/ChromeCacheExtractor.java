@@ -2,7 +2,7 @@
  *
  * Autopsy Forensic Browser
  *
- * Copyright 2019 Basis Technology Corp.
+ * Copyright 2019-2021 Basis Technology Corp.
  *
  * Project Contact/Architect: carrier <at> sleuthkit <dot> org
  *
@@ -31,7 +31,10 @@ import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +47,7 @@ import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
 import org.sleuthkit.autopsy.casemodule.services.FileManager;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.autopsy.coreutils.NetworkUtils;
 import org.sleuthkit.autopsy.datamodel.ContentUtils;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProgress;
 import org.sleuthkit.autopsy.ingest.IngestJobContext;
@@ -54,9 +58,11 @@ import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.Blackboard;
 import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE;
+import static org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_WEB_CACHE;
 import org.sleuthkit.datamodel.BlackboardAttribute;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.DerivedFile;
+import org.sleuthkit.datamodel.OsAccount;
 import org.sleuthkit.datamodel.TimeUtilities;
 import org.sleuthkit.datamodel.TskCoreException;
 import org.sleuthkit.datamodel.TskData;
@@ -145,15 +151,14 @@ final class ChromeCacheExtractor {
     }
 
     @NbBundle.Messages({
-        "ChromeCacheExtractor.moduleName=ChromeCacheExtractor",
         "# {0} - module name",
         "# {1} - row number",
         "# {2} - table length",
         "# {3} - cache path",
         "ChromeCacheExtractor.progressMsg={0}: Extracting cache entry {1} of {2} entries from {3}"
     })
-    ChromeCacheExtractor(Content dataSource, IngestJobContext context, DataSourceIngestModuleProgress progressBar ) { 
-        moduleName = Bundle.ChromeCacheExtractor_moduleName();
+    ChromeCacheExtractor(Content dataSource, IngestJobContext context, DataSourceIngestModuleProgress progressBar) { 
+        moduleName = NbBundle.getMessage(Chromium.class, "Chrome.moduleName");
         this.dataSource = dataSource;
         this.context = context;
         this.progressBar = progressBar;
@@ -171,14 +176,6 @@ final class ChromeCacheExtractor {
             currentCase = Case.getCurrentCaseThrows();
             fileManager = currentCase.getServices().getFileManager();
              
-            // Create an output folder to save any derived files
-            absOutputFolderName = RAImageIngestModule.getRAOutputPath(currentCase, moduleName);
-            relOutputFolderName = Paths.get( RAImageIngestModule.getRelModuleOutputPath(), moduleName).normalize().toString();
-            
-            File dir = new File(absOutputFolderName);
-            if (dir.exists() == false) {
-                dir.mkdirs();
-            }
         } catch (NoCurrentCaseException ex) {
             String msg = "Failed to get current case."; //NON-NLS
             throw new IngestModuleException(msg, ex);
@@ -203,7 +200,7 @@ final class ChromeCacheExtractor {
             outDir.mkdirs();
         }
         
-        String cacheTempPath = RAImageIngestModule.getRATempPath(currentCase, moduleName) + cachePath;
+        String cacheTempPath = RAImageIngestModule.getRATempPath(currentCase, moduleName, context.getJobId()) + cachePath;
         File tempDir = new File(cacheTempPath);
         if (tempDir.exists() == false) {
             tempDir.mkdirs();
@@ -219,7 +216,7 @@ final class ChromeCacheExtractor {
     private void cleanup () {
         
         for (Entry<String, FileWrapper> entry : this.fileCopyCache.entrySet()) {
-            Path tempFilePath = Paths.get(RAImageIngestModule.getRATempPath(currentCase, moduleName), entry.getKey() ); 
+            Path tempFilePath = Paths.get(RAImageIngestModule.getRATempPath(currentCase, moduleName, context.getJobId()), entry.getKey() ); 
             try {
                 entry.getValue().getFileCopy().getChannel().close();
                 entry.getValue().getFileCopy().close();
@@ -273,6 +270,17 @@ final class ChromeCacheExtractor {
             // Identify each cache folder by searching for the index files in each
             List<AbstractFile> indexFiles = findIndexFiles(); 
             
+            if (indexFiles.size() > 0) {
+                // Create an output folder to save any derived files
+                absOutputFolderName = RAImageIngestModule.getRAOutputPath(currentCase, moduleName, context.getJobId());
+                relOutputFolderName = Paths.get(RAImageIngestModule.getRelModuleOutputPath(currentCase, moduleName, context.getJobId())).normalize().toString();
+            
+                File dir = new File(absOutputFolderName);
+                if (dir.exists() == false) {
+                    dir.mkdirs();
+                }
+            }
+
             // Process each of the cache folders
             for (AbstractFile indexFile: indexFiles) {  
                 
@@ -280,7 +288,9 @@ final class ChromeCacheExtractor {
                     return;
                 }
                 
-                processCacheFolder(indexFile);
+                if (indexFile.getSize() > 0) {
+                    processCacheFolder(indexFile);
+                }
             }
         
         } catch (TskCoreException ex) {
@@ -359,28 +369,32 @@ final class ChromeCacheExtractor {
         // seek past the header
         indexFileROBuffer.position(INDEXFILE_HDR_SIZE);
 
-        /* Cycle through index and get the CacheAddress for each CacheEntry.  Process each entry
-         * to extract data, add artifacts, etc. from the f_XXXX and data_x files */
-        for (int i = 0; i <  indexHdr.getTableLen(); i++) {
-            
-            if (context.dataSourceIngestIsCancelled()) {
-                cleanup();
-                return;
-            }
-            
-            CacheAddress addr = new CacheAddress(indexFileROBuffer.getInt() & UINT32_MASK, cacheFolderName);
-            if (addr.isInitialized()) {
-                progressBar.progress(NbBundle.getMessage(this.getClass(),
-                                        "ChromeCacheExtractor.progressMsg",
-                                        moduleName, i, indexHdr.getTableLen(), cacheFolderName)  );
-                try {
-                    List<DerivedFile> addedFiles = processCacheEntry(addr, artifactsAdded);
-                    derivedFiles.addAll(addedFiles);
+        try {
+            /* Cycle through index and get the CacheAddress for each CacheEntry.  Process each entry
+             * to extract data, add artifacts, etc. from the f_XXXX and data_x files */
+            for (int i = 0; i <  indexHdr.getTableLen(); i++) {
+
+                if (context.dataSourceIngestIsCancelled()) {
+                    cleanup();
+                    return;
                 }
-                catch (TskCoreException | IngestModuleException ex) {
-                   logger.log(Level.WARNING, String.format("Failed to get cache entry at address %s", addr), ex); //NON-NLS
-                } 
-            }  
+
+                CacheAddress addr = new CacheAddress(indexFileROBuffer.getInt() & UINT32_MASK, cacheFolderName);
+                if (addr.isInitialized()) {
+                    progressBar.progress(NbBundle.getMessage(this.getClass(),
+                                            "ChromeCacheExtractor.progressMsg",
+                                            moduleName, i, indexHdr.getTableLen(), cacheFolderName)  );
+                    try {
+                        List<DerivedFile> addedFiles = processCacheEntry(addr, artifactsAdded);
+                        derivedFiles.addAll(addedFiles);
+                    }
+                    catch (TskCoreException | IngestModuleException ex) {
+                       logger.log(Level.WARNING, String.format("Failed to get cache entry at address %s for file with object ID %d (%s)", addr, indexFile.getId(), ex.getLocalizedMessage())); //NON-NLS
+                    } 
+                }  
+            }
+        } catch (java.nio.BufferUnderflowException ex) {
+            logger.log(Level.WARNING, String.format("Ran out of data unexpectedly reading file %s (ObjID: %d)", indexFile.getName(), indexFile.getId()));
         }
         
         if (context.dataSourceIngestIsCancelled()) {
@@ -400,7 +414,7 @@ final class ChromeCacheExtractor {
         progressBar.progress(String.format(Bundle.ChromeCacheExtract_adding_artifacts_msg(), artifactsAdded.size()));
         Blackboard blackboard = currentCase.getSleuthkitCase().getBlackboard();
         try {
-            blackboard.postArtifacts(artifactsAdded, moduleName);
+            blackboard.postArtifacts(artifactsAdded, moduleName, context.getJobId());
         } catch (Blackboard.BlackboardException ex) {
            logger.log(Level.WARNING, String.format("Failed to post cacheIndex artifacts "), ex); //NON-NLS
         }
@@ -516,32 +530,31 @@ final class ChromeCacheExtractor {
     private void addArtifacts(CacheEntry cacheEntry, AbstractFile cacheEntryFile, AbstractFile cachedItemFile, Collection<BlackboardArtifact> artifactsAdded) throws TskCoreException {
   
         // Create a TSK_WEB_CACHE entry with the parent as data_X file that had the cache entry
-        BlackboardArtifact webCacheArtifact = cacheEntryFile.newArtifact(ARTIFACT_TYPE.TSK_WEB_CACHE);
-        if (webCacheArtifact != null) {
-            Collection<BlackboardAttribute> webAttr = new ArrayList<>();
-            webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_URL,
-                    moduleName,
-                    ((cacheEntry.getKey() != null) ? cacheEntry.getKey() : "")));
-            webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_CREATED,
-                    moduleName, cacheEntry.getCreationTime()));
-            webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_HEADERS,
-                    moduleName, cacheEntry.getHTTPHeaders()));  
-            webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH,
-                    moduleName, cachedItemFile.getUniquePath()));
-            webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH_ID,
-                    moduleName, cachedItemFile.getId()));
-            webCacheArtifact.addAttributes(webAttr);
-            artifactsAdded.add(webCacheArtifact);
+        Collection<BlackboardAttribute> webAttr = new ArrayList<>();
+        String url = cacheEntry.getKey() != null ? cacheEntry.getKey() : "";
+        webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_URL,
+                moduleName, url));
+        webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DOMAIN,
+                moduleName, NetworkUtils.extractDomain(url)));
+        webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_CREATED,
+                moduleName, cacheEntry.getCreationTime()));
+        webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_HEADERS,
+                moduleName, cacheEntry.getHTTPHeaders()));  
+        webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH,
+                moduleName, cachedItemFile.getUniquePath()));
+        webAttr.add(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH_ID,
+                moduleName, cachedItemFile.getId()));
 
-            // Create a TSK_ASSOCIATED_OBJECT on the f_XXX or derived file file back to the CACHE entry
-            BlackboardArtifact associatedObjectArtifact = cachedItemFile.newArtifact(ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT);
-            if (associatedObjectArtifact != null) {
-                associatedObjectArtifact.addAttribute(
-                            new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ASSOCIATED_ARTIFACT,
-                                    moduleName, webCacheArtifact.getArtifactID()));
-                artifactsAdded.add(associatedObjectArtifact);
-            }
-        }
+        BlackboardArtifact webCacheArtifact = cacheEntryFile.newDataArtifact(new BlackboardArtifact.Type(ARTIFACT_TYPE.TSK_WEB_CACHE), webAttr);
+        artifactsAdded.add(webCacheArtifact);
+
+        // Create a TSK_ASSOCIATED_OBJECT on the f_XXX or derived file file back to the CACHE entry
+        BlackboardArtifact associatedObjectArtifact = cachedItemFile.newDataArtifact(
+                new BlackboardArtifact.Type(ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT), 
+                Arrays.asList(new BlackboardAttribute(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_ASSOCIATED_ARTIFACT, 
+                        moduleName, webCacheArtifact.getArtifactID())));
+        
+        artifactsAdded.add(associatedObjectArtifact);
     }
     
     /**
@@ -556,8 +569,13 @@ final class ChromeCacheExtractor {
         
         List<AbstractFile> effFiles = fileManager.findFiles(dataSource, "f_%", cachePath); //NON-NLS 
         for (AbstractFile abstractFile : effFiles ) {
+            String cacheKey = cachePath + abstractFile.getName();
             if (cachePath.equals(abstractFile.getParentPath()) && abstractFile.isFile()) {
-                this.externalFilesTable.put(cachePath + abstractFile.getName(), abstractFile);
+                // Don't overwrite an allocated version with an unallocated version
+                if (abstractFile.isMetaFlagSet(TskData.TSK_FS_META_FLAG_ENUM.ALLOC)
+                        || !externalFilesTable.containsKey(cacheKey)) {
+                    this.externalFilesTable.put(cacheKey, abstractFile);
+                }
             }
         }
     }
@@ -573,28 +591,63 @@ final class ChromeCacheExtractor {
        
         // see if it is cached
         String fileTableKey = cacheFolderName + cacheFileName;
-        if (cacheFileName.startsWith("f_") && externalFilesTable.containsKey(fileTableKey)) {
-            return Optional.of(externalFilesTable.get(fileTableKey));
+
+        if (cacheFileName != null) {
+            if (cacheFileName.startsWith("f_") && externalFilesTable.containsKey(fileTableKey)) {
+                return Optional.of(externalFilesTable.get(fileTableKey));
+            }
+        } else {
+            return Optional.empty();
         }
         
         if (fileCopyCache.containsKey(fileTableKey)) {
             return Optional.of(fileCopyCache.get(fileTableKey).getAbstractFile());
         }
-        
-        
-        List<AbstractFile> cacheFiles = fileManager.findFiles(dataSource, cacheFileName, cacheFolderName); //NON-NLS
+
+        List<AbstractFile> cacheFiles = currentCase.getSleuthkitCase().getFileManager().findFilesExactNameExactPath(dataSource, 
+                cacheFileName, cacheFolderName);
         if (!cacheFiles.isEmpty()) {
-            for (AbstractFile abstractFile: cacheFiles ) {
-                if (abstractFile.getUniquePath().trim().endsWith(DEFAULT_CACHE_PATH_STR)) {
-                    return Optional.of(abstractFile);
+            // Sort the list for consistency. Preference is:
+            // - In correct subfolder and allocated
+            // - In correct subfolder and unallocated
+            // - In incorrect subfolder and allocated
+            Collections.sort(cacheFiles, new Comparator<AbstractFile>() {
+                @Override
+                public int compare(AbstractFile file1, AbstractFile file2) {
+                    try {
+                        if (file1.getUniquePath().trim().endsWith(DEFAULT_CACHE_PATH_STR)
+                                && ! file2.getUniquePath().trim().endsWith(DEFAULT_CACHE_PATH_STR)) {
+                            return -1;
+                        }
+                        
+                        if (file2.getUniquePath().trim().endsWith(DEFAULT_CACHE_PATH_STR)
+                                && ! file1.getUniquePath().trim().endsWith(DEFAULT_CACHE_PATH_STR)) {
+                            return 1;
+                        }
+                    } catch (TskCoreException ex) {
+                        logger.log(Level.WARNING, "Error getting unique path for file with ID " + file1.getId() + " or " + file2.getId(), ex);
+                    }
+                        
+                    if (file1.isMetaFlagSet(TskData.TSK_FS_META_FLAG_ENUM.ALLOC)
+                            && ! file2.isMetaFlagSet(TskData.TSK_FS_META_FLAG_ENUM.ALLOC)) {
+                        return -1;
+                    }
+                    if (file2.isMetaFlagSet(TskData.TSK_FS_META_FLAG_ENUM.ALLOC)
+                            && ! file1.isMetaFlagSet(TskData.TSK_FS_META_FLAG_ENUM.ALLOC)) {
+                        return 1;
+                    }
+
+                    return Long.compare(file1.getId(), file2.getId());
                 }
-            }
+            });
+            
+            // The best match will be the first element
             return Optional.of(cacheFiles.get(0));
         }
         
         return Optional.empty(); 
     }
-    
+   
      /**
      * Finds the "index" file that exists in each user's cache.  This is used to 
      * enumerate all of the caches on the system. 
@@ -640,7 +693,7 @@ final class ChromeCacheExtractor {
         // write the file to disk so that we can have a memory-mapped ByteBuffer
         AbstractFile cacheFile = abstractFileOptional.get();
         RandomAccessFile randomAccessFile = null;
-        String tempFilePathname = RAImageIngestModule.getRATempPath(currentCase, moduleName) + cacheFolderName + cacheFile.getName(); //NON-NLS
+        String tempFilePathname = RAImageIngestModule.getRATempPath(currentCase, moduleName, context.getJobId()) + cacheFolderName + cacheFile.getName(); //NON-NLS
         try {
             File newFile = new File(tempFilePathname);
             ContentUtils.writeToFile(cacheFile, newFile, context::dataSourceIngestIsCancelled);
@@ -1016,13 +1069,20 @@ final class ChromeCacheExtractor {
             }
             
             // Don't extract data from external files.
-            if (!cacheAddress.isInExternalFile() ) {
+            if (!cacheAddress.isInExternalFile()) {
+                
+                if (cacheAddress.getFilename() == null) {
+                    throw new TskCoreException("Cache address has no file name");
+                }
                 
                 cacheFileCopy = findDataOrIndexFile(cacheAddress.getFilename(), cacheAddress.getCachePath()).get();
 
                 this.data = new byte [length];
                 ByteBuffer buf = cacheFileCopy.getByteBuffer();
                 int dataOffset = DATAFILE_HDR_SIZE + cacheAddress.getStartBlock() * cacheAddress.getBlockSize();
+                if (dataOffset > buf.capacity()) {
+                    return;
+                }
                 buf.position(dataOffset);
                 buf.get(data, 0, length);
                 
@@ -1250,7 +1310,7 @@ final class ChromeCacheExtractor {
        
         private String key;     // Key may be found within the entry or may be external
         
-        CacheEntry(CacheAddress cacheAdress, FileWrapper cacheFileCopy ) {
+        CacheEntry(CacheAddress cacheAdress, FileWrapper cacheFileCopy ) throws TskCoreException, IngestModuleException {
             this.selfAddress = cacheAdress;
             this.cacheFileCopy = cacheFileCopy;
             
@@ -1259,7 +1319,11 @@ final class ChromeCacheExtractor {
             int entryOffset = DATAFILE_HDR_SIZE + cacheAdress.getStartBlock() * cacheAdress.getBlockSize();
             
             // reposition the buffer to the the correct offset
-            fileROBuf.position(entryOffset);
+            if (entryOffset < fileROBuf.capacity()) {
+                fileROBuf.position(entryOffset);
+            } else {
+                throw new IngestModuleException("Position seeked in Buffer to big"); // NON-NLS
+            }
             
             hash = fileROBuf.getInt() & UINT32_MASK;
             
@@ -1272,7 +1336,12 @@ final class ChromeCacheExtractor {
             reuseCount = fileROBuf.getInt();
             refetchCount = fileROBuf.getInt();
             
-            state = EntryStateEnum.values()[fileROBuf.getInt()];
+            int stateVal = fileROBuf.getInt();
+            if ((stateVal >= 0) && (stateVal < EntryStateEnum.values().length)) {
+                state = EntryStateEnum.values()[stateVal];
+            } else {
+                throw new TskCoreException("Invalid EntryStateEnum value"); // NON-NLS
+            }
             creationTime = (fileROBuf.getLong() / 1000000) - Long.valueOf("11644473600");
             
             keyLen = fileROBuf.getInt();
@@ -1303,11 +1372,13 @@ final class ChromeCacheExtractor {
             if (longKeyAddresses != null) {
                 // Key is stored outside of the entry
                 try {
-                    CacheDataSegment data = new CacheDataSegment(longKeyAddresses, this.keyLen, true);
-                    key = data.getDataString();
+                    if (longKeyAddresses.getFilename() != null) {
+                        CacheDataSegment data = new CacheDataSegment(longKeyAddresses, this.keyLen, true);
+                        key = data.getDataString();
+                    }
                 } catch (TskCoreException | IngestModuleException ex) {
-                    logger.log(Level.WARNING, String.format("Failed to get external key from address %s", longKeyAddresses)); //NON-NLS 
-                } 
+                    throw new TskCoreException(String.format("Failed to get external key from address %s", longKeyAddresses)); //NON-NLS 
+                }
             }
             else {  // key stored within entry 
                 StringBuilder strBuilder = new StringBuilder(MAX_KEY_LEN);

@@ -1,5 +1,8 @@
 /*! \page ingest_page Ingest Modules
 
+[TOC]
+
+
 Ingest modules analyze the data in a data source.  They perform all of the analysis of the files and parse their contents.  Examples include \ref hash_db_page "hash calculation and lookup", \ref keyword_search_page "keyword searching", and \ref recent_activity_page "web artifact extraction". 
 
 Immediately after you add a data source to a case (see \ref ds_page), you will be presented with a dialog to configure the ingest modules to run on it.  Once configured, they will run in the background and provide you real-time results when they find relevant information.  
@@ -47,7 +50,7 @@ The file filters panel can be opened from the ingest module selection panel or t
 
 \image html ingest-file-filters.PNG
 
-Each filter contains one or more rules for selecting files based on a combination of file name, path, and how recently the file was modified. Only one rule needs to match for the file to pass. Additionally, you can enter multiple comma-separated file extensions. All files will still be displayed in the tree view, but the ingest modules will only run on a subset. If we use the previous example and run the hash module, only files ending in .png will have their hash computed.
+Each filter contains one or more rules for selecting files based on a combination of file name, path, file size, and how recently the file was modified. Only one rule needs to match for the file to pass. Additionally, you can enter multiple comma-separated file extensions. All files will still be displayed in the tree view, but the ingest modules will only run on a subset. If we use the previous example and run the hash module, only files ending in .png will have their hash computed.
 
 \section ingest_profiles Using Ingest Profiles
 

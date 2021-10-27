@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2020 Basis Technology Corp.
+ * Copyright 2020-2021 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,16 +20,15 @@ package org.sleuthkit.autopsy.datasourcesummary.ui;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.function.Function;
 import org.apache.commons.lang3.tuple.Pair;
 import org.openide.util.NbBundle.Messages;
-import org.sleuthkit.autopsy.casemodule.Case;
-import org.sleuthkit.autopsy.datasourcesummary.datamodel.DataSourceAnalysisSummary;
-import org.sleuthkit.autopsy.datasourcesummary.uiutils.CellModelTableCellRenderer.DefaultCellModel;
-import org.sleuthkit.autopsy.datasourcesummary.uiutils.DataFetchResult;
+import org.sleuthkit.autopsy.datasourcesummary.uiutils.ColumnModel;
 import org.sleuthkit.autopsy.datasourcesummary.uiutils.DataFetchWorker;
+import org.sleuthkit.autopsy.datasourcesummary.datamodel.DataFetcher;
+import org.sleuthkit.autopsy.datasourcesummary.uiutils.DefaultCellModel;
+import org.sleuthkit.autopsy.datasourcesummary.uiutils.IngestRunningLabel;
 import org.sleuthkit.autopsy.datasourcesummary.uiutils.JTablePanel;
-import org.sleuthkit.autopsy.datasourcesummary.uiutils.JTablePanel.ColumnModel;
 import org.sleuthkit.datamodel.DataSource;
 
 /**
@@ -38,39 +37,55 @@ import org.sleuthkit.datamodel.DataSource;
  */
 @Messages({
     "AnalysisPanel_keyColumn_title=Name",
-    "AnalysisPanel_countColumn_title=Count"
-})
+    "AnalysisPanel_countColumn_title=Count",
+    "AnalysisPanel_keywordSearchModuleName=Keyword Search",
+    "AnalysisPanel_hashsetHits_tabName=Hashset Hits",
+    "AnalysisPanel_keywordHits_tabName=Keyword Hits",
+    "AnalysisPanel_interestingItemHits_tabName=Interesting Item Hits",})
 public class AnalysisPanel extends BaseDataSourceSummaryPanel {
 
     private static final long serialVersionUID = 1L;
 
-    /**
-     * Default Column definitions for each table
-     */
-    private static final List<ColumnModel<Pair<String, Long>>> DEFAULT_COLUMNS = Arrays.asList(
+    // Default Column definitions for each table
+    private static final List<ColumnModel<Pair<String, Long>, DefaultCellModel<?>>> DEFAULT_COLUMNS = Arrays.asList(
             new ColumnModel<>(
                     Bundle.AnalysisPanel_keyColumn_title(),
-                    (pair) -> new DefaultCellModel(pair.getKey()),
+                    (pair) -> new DefaultCellModel<>(pair.getKey()),
                     300
             ),
             new ColumnModel<>(
                     Bundle.AnalysisPanel_countColumn_title(),
-                    (pair) -> new DefaultCellModel(String.valueOf(pair.getValue())),
+                    (pair) -> new DefaultCellModel<>(pair.getValue()),
                     100
             )
     );
 
-    private final JTablePanel<Pair<String, Long>> hashsetHitsTable = JTablePanel.getJTablePanel(DEFAULT_COLUMNS);
+    // Identifies the key in the records for the tables.
+    private static final Function<Pair<String, Long>, String> DEFAULT_KEY_PROVIDER = (pair) -> pair.getKey();
 
-    private final JTablePanel<Pair<String, Long>> keywordHitsTable = JTablePanel.getJTablePanel(DEFAULT_COLUMNS);
+    private final DataFetcher<DataSource, List<Pair<String, Long>>> hashsetsFetcher;
+    private final DataFetcher<DataSource, List<Pair<String, Long>>> keywordsFetcher;
+    private final DataFetcher<DataSource, List<Pair<String, Long>>> interestingItemsFetcher;
 
-    private final JTablePanel<Pair<String, Long>> interestingItemsTable = JTablePanel.getJTablePanel(DEFAULT_COLUMNS);
+    private final JTablePanel<Pair<String, Long>> hashsetHitsTable
+            = JTablePanel.getJTablePanel(DEFAULT_COLUMNS)
+                    .setKeyFunction(DEFAULT_KEY_PROVIDER);
+
+    private final JTablePanel<Pair<String, Long>> keywordHitsTable
+            = JTablePanel.getJTablePanel(DEFAULT_COLUMNS)
+                    .setKeyFunction(DEFAULT_KEY_PROVIDER);
+
+    private final JTablePanel<Pair<String, Long>> interestingItemsTable
+            = JTablePanel.getJTablePanel(DEFAULT_COLUMNS)
+                    .setKeyFunction(DEFAULT_KEY_PROVIDER);
 
     private final List<JTablePanel<?>> tables = Arrays.asList(
             hashsetHitsTable,
             keywordHitsTable,
             interestingItemsTable
     );
+
+    private final IngestRunningLabel ingestRunningLabel = new IngestRunningLabel();
 
     /**
      * All of the components necessary for data fetch swing workers to load data
@@ -82,23 +97,29 @@ public class AnalysisPanel extends BaseDataSourceSummaryPanel {
      * Creates a new DataSourceUserActivityPanel.
      */
     public AnalysisPanel() {
-        this(new DataSourceAnalysisSummary());
+        this(new AnalysisSummaryGetter());
     }
 
-    public AnalysisPanel(DataSourceAnalysisSummary analysisData) {
+    public AnalysisPanel(AnalysisSummaryGetter analysisData) {
+        super(analysisData);
+
+        hashsetsFetcher = (dataSource) -> analysisData.getHashsetCounts(dataSource);
+        keywordsFetcher = (dataSource) -> analysisData.getKeywordCounts(dataSource);
+        interestingItemsFetcher = (dataSource) -> analysisData.getInterestingItemCounts(dataSource);
+
         // set up data acquisition methods
         dataFetchComponents = Arrays.asList(
                 // hashset hits loading components
                 new DataFetchWorker.DataFetchComponents<>(
-                        (dataSource) -> analysisData.getHashsetCounts(dataSource),
+                        hashsetsFetcher,
                         (result) -> hashsetHitsTable.showDataFetchResult(result)),
                 // keyword hits loading components
                 new DataFetchWorker.DataFetchComponents<>(
-                        (dataSource) -> analysisData.getKeywordCounts(dataSource),
+                        keywordsFetcher,
                         (result) -> keywordHitsTable.showDataFetchResult(result)),
                 // interesting item hits loading components
                 new DataFetchWorker.DataFetchComponents<>(
-                        (dataSource) -> analysisData.getInterestingItemCounts(dataSource),
+                        interestingItemsFetcher,
                         (result) -> interestingItemsTable.showDataFetchResult(result))
         );
 
@@ -106,26 +127,19 @@ public class AnalysisPanel extends BaseDataSourceSummaryPanel {
     }
 
     @Override
+    public void close() {
+        ingestRunningLabel.unregister();
+        super.close();
+    }
+
+    @Override
+    protected void fetchInformation(DataSource dataSource) {
+        fetchInformation(dataFetchComponents, dataSource);
+    }
+
+    @Override
     protected void onNewDataSource(DataSource dataSource) {
-        // if no data source is present or the case is not open,
-        // set results for tables to null.
-        if (dataSource == null || !Case.isCaseOpen()) {
-            this.dataFetchComponents.forEach((item) -> item.getResultHandler()
-                    .accept(DataFetchResult.getSuccessResult(null)));
-
-        } else {
-            // set tables to display loading screen
-            this.tables.forEach((table) -> table.showDefaultLoadingMessage());
-
-            // create swing workers to run for each table
-            List<DataFetchWorker<?, ?>> workers = dataFetchComponents
-                    .stream()
-                    .map((components) -> new DataFetchWorker<>(components, dataSource))
-                    .collect(Collectors.toList());
-
-            // submit swing workers to run
-            submit(workers);
-        }
+        onNewDataSource(dataFetchComponents, tables, dataSource);
     }
 
     /**
@@ -139,6 +153,7 @@ public class AnalysisPanel extends BaseDataSourceSummaryPanel {
 
         javax.swing.JScrollPane mainScrollPane = new javax.swing.JScrollPane();
         javax.swing.JPanel mainContentPanel = new javax.swing.JPanel();
+        javax.swing.JPanel ingestRunningPanel = ingestRunningLabel;
         javax.swing.JLabel hashsetHitsLabel = new javax.swing.JLabel();
         javax.swing.Box.Filler filler1 = new javax.swing.Box.Filler(new java.awt.Dimension(0, 2), new java.awt.Dimension(0, 2), new java.awt.Dimension(32767, 2));
         javax.swing.JPanel hashSetHitsPanel = hashsetHitsTable;
@@ -156,6 +171,12 @@ public class AnalysisPanel extends BaseDataSourceSummaryPanel {
         mainContentPanel.setMaximumSize(new java.awt.Dimension(32767, 452));
         mainContentPanel.setMinimumSize(new java.awt.Dimension(200, 452));
         mainContentPanel.setLayout(new javax.swing.BoxLayout(mainContentPanel, javax.swing.BoxLayout.PAGE_AXIS));
+
+        ingestRunningPanel.setAlignmentX(0.0F);
+        ingestRunningPanel.setMaximumSize(new java.awt.Dimension(32767, 25));
+        ingestRunningPanel.setMinimumSize(new java.awt.Dimension(10, 25));
+        ingestRunningPanel.setPreferredSize(new java.awt.Dimension(10, 25));
+        mainContentPanel.add(ingestRunningPanel);
 
         org.openide.awt.Mnemonics.setLocalizedText(hashsetHitsLabel, org.openide.util.NbBundle.getMessage(AnalysisPanel.class, "AnalysisPanel.hashsetHitsLabel.text")); // NOI18N
         mainContentPanel.add(hashsetHitsLabel);

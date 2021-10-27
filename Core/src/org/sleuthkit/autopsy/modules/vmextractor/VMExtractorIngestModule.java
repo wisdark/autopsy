@@ -49,6 +49,7 @@ import org.sleuthkit.autopsy.ingest.IngestManager;
 import org.sleuthkit.autopsy.ingest.IngestMessage;
 import org.sleuthkit.autopsy.ingest.IngestModule;
 import org.sleuthkit.autopsy.ingest.IngestServices;
+import org.sleuthkit.autopsy.modules.filetypeid.FileTypeDetector;
 import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.Content;
 import org.sleuthkit.datamodel.DataSource;
@@ -118,6 +119,7 @@ final class VMExtractorIngestModule extends DataSourceIngestModuleAdapter {
         try {
             // look for all VM files
             vmFiles = findVirtualMachineFiles(dataSource);
+            vmFiles = removeNonVMFiles(vmFiles);
         } catch (TskCoreException ex) {
             logger.log(Level.SEVERE, "Error querying case database", ex); //NON-NLS
             return ProcessResult.ERROR;
@@ -198,7 +200,6 @@ final class VMExtractorIngestModule extends DataSourceIngestModuleAdapter {
                     // for extracted virtual machines there is no manifest XML file to read data source ID from so use parent data source ID.
                     // ingest the data sources  
                     ingestVirtualMachineImage(Paths.get(folder, file));
-                    logger.log(Level.INFO, "Ingest complete for virtual machine file {0} in folder {1}", new Object[]{file, folder}); //NON-NLS
                 } catch (InterruptedException ex) {
                     logger.log(Level.INFO, "Interrupted while ingesting virtual machine file " + file + " in folder " + folder, ex); //NON-NLS
                 } catch (IOException ex) {
@@ -237,6 +238,47 @@ final class VMExtractorIngestModule extends DataSourceIngestModuleAdapter {
             vmFiles.addAll(Case.getCurrentCaseThrows().getServices().getFileManager().findFiles(dataSource, searchString));
         }
         return vmFiles;
+    }
+    
+    /**
+     * Check all the files and if a file is a vhd then check to make sure it is a valid vhd using the mimetype. We are not
+     * checking the mimetype for VMDK's at this point in time.
+     * 
+     * @param vmFiles List of virtual machine abstract files to look at
+     * 
+     * @return List of abstract files of virtual machine files.
+     */
+    private static List<AbstractFile> removeNonVMFiles(List<AbstractFile> vmFiles) {
+        List<AbstractFile> vFile = new ArrayList<>();
+        FileTypeDetector fileTypeDetector = null;
+        for (AbstractFile vmFile : vmFiles) {
+            if (vmFile.getNameExtension().equalsIgnoreCase("vhd")) {
+                String fileMimeType = vmFile.getMIMEType();
+                if (fileMimeType == null) {
+                    try {
+                        fileTypeDetector = new FileTypeDetector();
+                    } catch (FileTypeDetector.FileTypeDetectorInitException ex) {
+                        logger.log(Level.WARNING, String.format("Unable to create file type detector for determining MIME type for file %s with id of %d", vmFile.getName(), vmFile.getId()));
+                        vFile.add(vmFile);
+                        continue;
+                    }
+                    fileMimeType = fileTypeDetector.getMIMEType(vmFile);
+                    try {
+                        vmFile.setMIMEType(fileMimeType);
+                        vmFile.save();
+                    } catch (TskCoreException ex) {
+                        logger.log(Level.WARNING, String.format("Unable to save mimetype of %s for file %s with id of %d", fileMimeType, vmFile.getName(), vmFile.getId()));                    
+                    }
+                }               
+                if (fileMimeType.equalsIgnoreCase("application/x-vhd")) {
+                    vFile.add(vmFile);
+                }
+            } else {
+                vFile.add(vmFile);
+            }
+        }
+
+        return vFile;
     }
 
     /**
@@ -287,8 +329,8 @@ final class VMExtractorIngestModule extends DataSourceIngestModuleAdapter {
         }
 
         /*
-         * If the image was added, analyze it with the ingest modules for this
-         * ingest context.
+         * If the image was added, start analysis on it with the ingest modules for this
+         * ingest context. Note that this does not wait for ingest to complete.
          */
         if (!dspCallback.vmDataSources.isEmpty()) {
             Case.getCurrentCaseThrows().notifyDataSourceAdded(dspCallback.vmDataSources.get(0), taskId);
@@ -300,7 +342,7 @@ final class VMExtractorIngestModule extends DataSourceIngestModuleAdapter {
             IngestServices.getInstance().postMessage(IngestMessage.createMessage(IngestMessage.MessageType.INFO,
                     VMExtractorIngestModuleFactory.getModuleName(),
                     NbBundle.getMessage(this.getClass(), "VMExtractorIngestModule.addedVirtualMachineImage.message", vmFile.toString())));
-            IngestManager.getInstance().queueIngestJob(dataSourceContent, ingestJobSettings);
+            IngestManager.getInstance().beginIngestJob(dataSourceContent, ingestJobSettings);
         } else {
             Case.getCurrentCaseThrows().notifyFailedAddingDataSource(taskId);
         }
