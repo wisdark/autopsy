@@ -178,6 +178,28 @@ public final class WaypointBuilder {
 
         return trackList;
     }
+    
+    /**
+     * Returns a list of areas from the given list of waypoints.
+     *
+     * @param waypoints A list of waypoints
+     *
+     * @return A list of areas or an empty list if none were found.
+     */
+    public static List<Area> getAreas(List<Waypoint> waypoints) {
+        List<Area> areaList = new ArrayList<>();
+        for (Waypoint point : waypoints) {
+            GeoPath path = point.getParentGeoPath();
+            if (path instanceof Area) {
+                Area area = (Area) path;
+                if (!areaList.contains(area)) {
+                    areaList.add(area);
+                }
+            }
+        }
+
+        return areaList;
+    }
 
     /**
      * Gets a list of Waypoints for TSK_GPS_TRACKPOINT artifacts.
@@ -467,8 +489,6 @@ public final class WaypointBuilder {
      */
     static public void getAllWaypoints(SleuthkitCase skCase, List<DataSource> dataSources, List<ARTIFACT_TYPE> artifactTypes, boolean showAll, int cntDaysFromRecent, boolean noTimeStamp, WaypointFilterQueryCallBack queryCallBack) throws GeoLocationDataException {
         String query = buildQuery(dataSources, showAll, cntDaysFromRecent, noTimeStamp);
-
-        logger.log(Level.INFO, query);
 
         try {
             // The CaseDBAccessManager.select function will add a SELECT 

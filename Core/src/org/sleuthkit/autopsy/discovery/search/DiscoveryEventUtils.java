@@ -19,12 +19,14 @@
 package org.sleuthkit.autopsy.discovery.search;
 
 import com.google.common.eventbus.EventBus;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.sleuthkit.autopsy.discovery.search.DiscoveryKeyUtils.GroupKey;
 import org.sleuthkit.autopsy.discovery.search.SearchData.Type;
 import org.sleuthkit.datamodel.AbstractFile;
+import org.sleuthkit.datamodel.BlackboardArtifact;
 
 /**
  * Class to handle event bus and events for discovery tool.
@@ -88,13 +90,13 @@ public final class DiscoveryEventUtils {
             //no arg constructor
         }
     }
-    
+
     /**
-     * Event to signal that any background tasks currently running should
-     * be cancelled.
+     * Event to signal that any background tasks currently running should be
+     * cancelled.
      */
     public static final class CancelBackgroundTasksEvent {
-        
+
         public CancelBackgroundTasksEvent() {
             //no-arg constructor
         }
@@ -121,6 +123,33 @@ public final class DiscoveryEventUtils {
          */
         public List<AbstractFile> getInstances() {
             return Collections.unmodifiableList(instances);
+        }
+    }
+
+    /**
+     * Event to signal that the list should be populated.
+     */
+    public static final class PopulateDomainTabsEvent {
+
+        private final String domain;
+
+        /**
+         * Construct a new PopulateDomainTabsEvent.
+         *
+         * @param domain The domain this event is for, or empty if no domain is
+         *               selected.
+         */
+        public PopulateDomainTabsEvent(String domain) {
+            this.domain = domain;
+        }
+
+        /**
+         * Get the domain for the details area.
+         *
+         * @return The the domain for the details area.
+         */
+        public String getDomain() {
+            return domain;
         }
     }
 
@@ -201,6 +230,117 @@ public final class DiscoveryEventUtils {
             return sortMethod;
         }
 
+    }
+
+    /**
+     * Event to signal the completion of a search being performed.
+     */
+    public static final class ArtifactSearchResultEvent {
+
+        private final List<BlackboardArtifact> listOfArtifacts = new ArrayList<>();
+        private final BlackboardArtifact.ARTIFACT_TYPE artifactType;
+        private final boolean grabFocus;
+
+        /**
+         * Construct a new ArtifactSearchResultEvent with a list of specified
+         * results and an artifact type.
+         *
+         * @param artifactType    The type of results in the list.
+         * @param listOfArtifacts The list of results retrieved.
+         * @param shouldGrabFocus True if the list of artifacts should have
+         *                        focus, false otherwise.
+         */
+        public ArtifactSearchResultEvent(BlackboardArtifact.ARTIFACT_TYPE artifactType, List<BlackboardArtifact> listOfArtifacts, boolean shouldGrabFocus) {
+            if (listOfArtifacts != null) {
+                this.listOfArtifacts.addAll(listOfArtifacts);
+            }
+            this.artifactType = artifactType;
+            this.grabFocus = shouldGrabFocus;
+        }
+
+        /**
+         * Get the list of results included in the event.
+         *
+         * @return The list of results retrieved.
+         */
+        public List<BlackboardArtifact> getListOfArtifacts() {
+            return Collections.unmodifiableList(listOfArtifacts);
+        }
+
+        /**
+         * Get the type of BlackboardArtifact type of which exist in the list.
+         *
+         * @return The BlackboardArtifact type of which exist in the list.
+         */
+        public BlackboardArtifact.ARTIFACT_TYPE getArtifactType() {
+            return artifactType;
+        }
+
+        /**
+         * Get whether or not the artifacts list should grab focus.
+         *
+         * @return True if the list of artifacts should have focus, false
+         *         otherwise.
+         */
+        public boolean shouldGrabFocus() {
+            return grabFocus;
+        }
+
+    }
+
+    /**
+     * Event to signal the completion of a search for mini timeline results
+     * being performed.
+     */
+    public static final class MiniTimelineResultEvent {
+
+        private final List<MiniTimelineResult> results = new ArrayList<>();
+        private final String domain;
+        private final boolean grabFocus;
+
+        /**
+         * Construct a new MiniTimelineResultEvent.
+         *
+         * @param results         The list of MiniTimelineResults contained in
+         *                        this event.
+         * @param domain          The domain the results are for.
+         * @param shouldGrabFocus True if the list of dates should have focus,
+         *                        false otherwise.
+         */
+        public MiniTimelineResultEvent(List<MiniTimelineResult> results, String domain, boolean shouldGrabFocus) {
+            if (results != null) {
+                this.results.addAll(results);
+            }
+            this.grabFocus = shouldGrabFocus;
+            this.domain = domain;
+        }
+
+        /**
+         * Get the list of results included in the event.
+         *
+         * @return The list of results found.
+         */
+        public List<MiniTimelineResult> getResultList() {
+            return Collections.unmodifiableList(results);
+        }
+
+        /**
+         * Get the domain this list of results is for.
+         *
+         * @return The domain the list of results is for.
+         */
+        public String getDomain() {
+            return domain;
+        }
+
+        /**
+         * Get whether or not the dates list should grab focus.
+         *
+         * @return True if the list of dates should have focus, false otherwise.
+         */
+        public boolean shouldGrabFocus() {
+            return grabFocus;
+        }
     }
 
     /**

@@ -1,7 +1,7 @@
 /*
  * Autopsy
  *
- * Copyright 2020 Basis Technology Corp.
+ * Copyright 2020-2021 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,7 +31,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
-import javax.swing.SwingUtilities;
 import org.apache.commons.lang.StringUtils;
 import org.openide.util.NbBundle.Messages;
 import org.openide.windows.WindowManager;
@@ -40,6 +39,7 @@ import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepoException;
 import org.sleuthkit.autopsy.centralrepository.datamodel.CentralRepository;
 import org.sleuthkit.autopsy.coreutils.Logger;
+import org.sleuthkit.autopsy.coreutils.ThreadConfined;
 import org.sleuthkit.autopsy.discovery.search.DiscoveryAttributes;
 import org.sleuthkit.autopsy.discovery.search.DiscoveryEventUtils;
 import org.sleuthkit.autopsy.discovery.search.Group;
@@ -99,6 +99,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     /**
      * Private constructor to construct a new DiscoveryDialog
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @Messages("DiscoveryDialog.name.text=Discovery")
     private DiscoveryDialog() {
         super(WindowManager.getDefault().getMainWindow(), Bundle.DiscoveryDialog_name_text(), true);
@@ -116,10 +117,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
             @Override
             public void itemStateChanged(ItemEvent event) {
                 if (event.getStateChange() == ItemEvent.SELECTED) {
-                    SwingUtilities.invokeLater(() -> {
-                        getSelectedFilterPanel().setLastGroupingAttributeType(groupByCombobox.getItemAt(groupByCombobox.getSelectedIndex()));
-                    });
-
+                    getSelectedFilterPanel().setLastGroupingAttributeType(groupByCombobox.getItemAt(groupByCombobox.getSelectedIndex()));
                 }
             }
         });
@@ -127,9 +125,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
             @Override
             public void itemStateChanged(ItemEvent event) {
                 if (event.getStateChange() == ItemEvent.SELECTED) {
-                    SwingUtilities.invokeLater(() -> {
-                        getSelectedFilterPanel().setLastSortingMethod(orderByCombobox.getItemAt(orderByCombobox.getSelectedIndex()));
-                    });
+                    getSelectedFilterPanel().setLastSortingMethod(orderByCombobox.getItemAt(orderByCombobox.getSelectedIndex()));
                 }
             }
         });
@@ -137,20 +133,19 @@ final class DiscoveryDialog extends javax.swing.JDialog {
             @Override
             public void itemStateChanged(ItemEvent event) {
                 if (event.getStateChange() == ItemEvent.SELECTED) {
-                    SwingUtilities.invokeLater(() -> {
-                        getSelectedFilterPanel().setLastGroupSortingAlg(groupSortingComboBox.getItemAt(groupSortingComboBox.getSelectedIndex()));
-                    });
+                    getSelectedFilterPanel().setLastGroupSortingAlg(groupSortingComboBox.getItemAt(groupSortingComboBox.getSelectedIndex()));
                 }
             }
         });
         Case.addEventTypeSubscriber(CASE_EVENTS_OF_INTEREST, this.new CasePropertyChangeListener());
         IngestManager.getInstance().addIngestModuleEventListener(INGEST_MODULE_EVENTS_OF_INTEREST, this.new ModuleChangeListener());
-        setPreferredSize(new java.awt.Dimension(1000, 650));
+        setPreferredSize(new java.awt.Dimension(1000, 800));
     }
 
     /**
      * Update the search settings to a default state.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     void updateSearchSettings() {
         removeAllPanels();
         imageFilterPanel = null;
@@ -176,6 +171,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     /**
      * Set the type buttons to a default state where none are selected.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private void unselectAllButtons() {
         imagesButton.setSelected(false);
         imagesButton.setEnabled(true);
@@ -194,6 +190,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     /**
      * Private helper method to perform update of comboboxes update.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private void updateComboBoxes() {
         // Set up the grouping attributes
         List<GroupingAttributeType> groupingAttrs = new ArrayList<>();
@@ -230,6 +227,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
      *
      * @return The panel that corresponds to the currently selected type.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private AbstractFiltersPanel getSelectedFilterPanel() {
         switch (type) {
             case IMAGE:
@@ -251,6 +249,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
      *
      * @param type The Type of GroupingAttribute to add.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private void addTypeToGroupByComboBox(GroupingAttributeType type) {
         switch (type) {
             case FREQUENCY:
@@ -282,7 +281,8 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     /**
      * Validate the filter settings for File type filters.
      */
-    synchronized void validateDialog() {
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
+    void validateDialog() {
         AbstractFiltersPanel panel = getSelectedFilterPanel();
         if (panel != null) {
             panel.validateFields();
@@ -318,6 +318,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
 
         setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE);
         setMinimumSize(new java.awt.Dimension(600, 300));
+        setPreferredSize(new java.awt.Dimension(1000, 800));
 
         imagesButton.setIcon(new javax.swing.ImageIcon(getClass().getResource("/org/sleuthkit/autopsy/images/pictures-icon.png"))); // NOI18N
         org.openide.awt.Mnemonics.setLocalizedText(imagesButton, org.openide.util.NbBundle.getMessage(DiscoveryDialog.class, "DiscoveryDialog.imagesButton.text")); // NOI18N
@@ -401,17 +402,17 @@ final class DiscoveryDialog extends javax.swing.JDialog {
         toolBarPanelLayout.setVerticalGroup(
             toolBarPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(toolBarPanelLayout.createSequentialGroup()
-                .addGap(8, 8, 8)
+                .addGap(6, 6, 6)
                 .addGroup(toolBarPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                     .addComponent(filler1, javax.swing.GroupLayout.PREFERRED_SIZE, 10, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(step1Label))
-                .addGap(8, 8, 8)
+                .addGap(6, 6, 6)
                 .addGroup(toolBarPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
                     .addComponent(videosButton, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(imagesButton, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(documentsButton, javax.swing.GroupLayout.PREFERRED_SIZE, 43, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(domainsButton, javax.swing.GroupLayout.PREFERRED_SIZE, 43, javax.swing.GroupLayout.PREFERRED_SIZE))
-                .addGap(8, 8, 8))
+                .addGap(6, 6, 6))
         );
 
         getContentPane().add(toolBarPanel, java.awt.BorderLayout.PAGE_START);
@@ -456,17 +457,17 @@ final class DiscoveryDialog extends javax.swing.JDialog {
         sortingPanelLayout.setVerticalGroup(
             sortingPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(sortingPanelLayout.createSequentialGroup()
-                .addGap(8, 8, 8)
+                .addGap(6, 6, 6)
                 .addGroup(sortingPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
                     .addComponent(groupByCombobox, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(groupByLabel)
                     .addComponent(orderByCombobox, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(orderByLabel))
-                .addGap(8, 8, 8)
+                .addGap(6, 6, 6)
                 .addGroup(sortingPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.BASELINE)
                     .addComponent(groupSortingComboBox, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(orderGroupsByLabel))
-                .addGap(8, 8, 8))
+                .addGap(6, 6, 6))
         );
 
         javax.swing.GroupLayout displaySettingsPanelLayout = new javax.swing.GroupLayout(displaySettingsPanel);
@@ -486,13 +487,13 @@ final class DiscoveryDialog extends javax.swing.JDialog {
         displaySettingsPanelLayout.setVerticalGroup(
             displaySettingsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
             .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, displaySettingsPanelLayout.createSequentialGroup()
-                .addGap(8, 8, 8)
-                .addComponent(sortingPanel, javax.swing.GroupLayout.PREFERRED_SIZE, 89, javax.swing.GroupLayout.PREFERRED_SIZE)
-                .addGap(8, 8, 8)
+                .addGap(6, 6, 6)
+                .addComponent(sortingPanel, javax.swing.GroupLayout.PREFERRED_SIZE, 82, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addGap(6, 6, 6)
                 .addGroup(displaySettingsPanelLayout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                     .addComponent(errorLabel, javax.swing.GroupLayout.PREFERRED_SIZE, 23, javax.swing.GroupLayout.PREFERRED_SIZE)
                     .addComponent(searchButton))
-                .addGap(8, 8, 8))
+                .addGap(6, 6, 6))
         );
 
         getContentPane().add(displaySettingsPanel, java.awt.BorderLayout.PAGE_END);
@@ -551,6 +552,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     /**
      * Helper method to remove all filter panels and their listeners
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private void removeAllPanels() {
         if (imageFilterPanel != null) {
             remove(imageFilterPanel);
@@ -571,7 +573,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     }
 
     private void searchButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_searchButtonActionPerformed
-        // Get the selected filters
+        setVisible(false); //set visible used here instead of dispose incase dispose code changes
         final DiscoveryTopComponent tc = DiscoveryTopComponent.getTopComponent();
         if (tc == null) {
             setValid("No Top Component Found");
@@ -581,6 +583,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
             tc.open();
         }
         tc.resetTopComponent();
+        // Get the selected filters
         List<AbstractFilter> filters;
         if (videosButton.isSelected()) {
             filters = videoFilterPanel.getFilters();
@@ -614,7 +617,6 @@ final class DiscoveryDialog extends javax.swing.JDialog {
         }
         searchWorker = new SearchWorker(centralRepoDb, type, filters, groupingAttr, groupSortAlgorithm, fileSort);
         searchWorker.execute();
-        dispose();
         tc.toFront();
         tc.requestActive();
     }//GEN-LAST:event_searchButtonActionPerformed
@@ -635,6 +637,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
         repaint();
     }//GEN-LAST:event_domainsButtonActionPerformed
 
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @Override
     public void dispose() {
         setVisible(false);
@@ -643,9 +646,11 @@ final class DiscoveryDialog extends javax.swing.JDialog {
     /**
      * Cancel the searchWorker if it exists.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     void cancelSearch() {
         if (searchWorker != null) {
             searchWorker.cancel(true);
+            searchWorker = null;
         }
     }
 
@@ -656,6 +661,7 @@ final class DiscoveryDialog extends javax.swing.JDialog {
      * @param error The error message to display, empty string if there is no
      *              error.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private void setValid(String error) {
         if (StringUtils.isBlank(error)) {
             errorLabel.setText("");
@@ -744,7 +750,6 @@ final class DiscoveryDialog extends javax.swing.JDialog {
                                     || eventData.getBlackboardArtifactType().getTypeID() == BlackboardArtifact.ARTIFACT_TYPE.TSK_INTERESTING_ARTIFACT_HIT.getTypeID()) {
                                 shouldUpdate = shouldUpdateFilters(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_SET_NAME.getTypeID(), eventData, interestingItems);
                             }
-
                         }
                     } catch (NoCurrentCaseException notUsed) {
                         // Case is closed, do nothing.

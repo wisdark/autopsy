@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2013-2020 Basis Technology Corp.
+ * Copyright 2013-2021 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +48,7 @@ import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.datamodel.ContentUtils;
 import org.sleuthkit.autopsy.report.ReportProgressPanel;
 import static org.sleuthkit.autopsy.casemodule.services.TagsManager.getNotableTagLabel;
+import org.sleuthkit.autopsy.coreutils.TimeZoneUtils;
 import org.sleuthkit.datamodel.AbstractFile;
 import org.sleuthkit.datamodel.Account;
 import org.sleuthkit.datamodel.BlackboardArtifact;
@@ -102,20 +103,10 @@ class TableReportGenerator {
     private void getAllExistingArtiactTypes() throws NoCurrentCaseException, TskCoreException {
         // get all possible artifact types
         ArrayList<BlackboardArtifact.Type> doNotReport = new ArrayList<>();
-        doNotReport.add(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_GEN_INFO.getTypeID(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_GEN_INFO.getLabel(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_GEN_INFO.getDisplayName()));
-        doNotReport.add(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_TOOL_OUTPUT.getTypeID(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_TOOL_OUTPUT.getLabel(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_TOOL_OUTPUT.getDisplayName())); // output is too unstructured for table review
-        doNotReport.add(new BlackboardArtifact.Type(
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT.getTypeID(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT.getLabel(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT.getDisplayName()));
-        doNotReport.add(new BlackboardArtifact.Type(
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_TL_EVENT.getTypeID(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_TL_EVENT.getLabel(),
-                BlackboardArtifact.ARTIFACT_TYPE.TSK_TL_EVENT.getDisplayName()));
+        doNotReport.add(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_GEN_INFO));
+        doNotReport.add(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_TOOL_OUTPUT)); // output is too unstructured for table review
+        doNotReport.add(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_ASSOCIATED_OBJECT));
+        doNotReport.add(new BlackboardArtifact.Type(BlackboardArtifact.ARTIFACT_TYPE.TSK_TL_EVENT));
 
         Case.getCurrentCaseThrows().getSleuthkitCase().getArtifactTypes().forEach(artifactTypes::add);
         artifactTypes.removeAll(doNotReport);
@@ -1241,7 +1232,7 @@ class TableReportGenerator {
                     continue;
                 }
                 try {
-                    artifacts.add(new ArtifactData(artifact, Case.getCurrentCaseThrows().getSleuthkitCase().getBlackboardAttributes(artifact), uniqueTagNames));
+                    artifacts.add(new ArtifactData(artifact, Case.getCurrentCaseThrows().getSleuthkitCase().getBlackboard().getBlackboardAttributes(artifact), uniqueTagNames));
                 } catch (TskCoreException ex) {
                     errorList.add(NbBundle.getMessage(this.getClass(), "ReportGenerator.errList.failedGetBBAttribs"));
                     logger.log(Level.SEVERE, "Failed to get Blackboard Attributes when generating report.", ex); //NON-NLS
@@ -1348,7 +1339,7 @@ class TableReportGenerator {
                     new BlackboardAttribute.Type(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH)));
 
             columns.add(new AttributeColumn(NbBundle.getMessage(this.getClass(), "ReportGenerator.artTableColHdr.dateTime"),
-                    new BlackboardAttribute.Type(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME)));
+                    new BlackboardAttribute.Type(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_DATETIME_ACCESSED )));
 
             attributeTypeSet.remove(new Type(BlackboardAttribute.ATTRIBUTE_TYPE.TSK_PATH_ID));
         } else if (BlackboardArtifact.ARTIFACT_TYPE.TSK_INSTALLED_PROG.getTypeID() == artifactTypeId) {
@@ -1793,6 +1784,7 @@ class TableReportGenerator {
                 || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_GPS_BOOKMARK.getTypeID()
                 || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_GPS_LAST_KNOWN_LOCATION.getTypeID()
                 || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_GPS_SEARCH.getTypeID()
+                || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_GPS_AREA.getTypeID()
                 || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_SERVICE_ACCOUNT.getTypeID()
                 || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_ENCRYPTION_DETECTED.getTypeID()
                 || artifactTypeId == BlackboardArtifact.ARTIFACT_TYPE.TSK_ENCRYPTION_SUSPECTED.getTypeID()
@@ -1831,6 +1823,10 @@ class TableReportGenerator {
      */
     private boolean shouldFilterFromReport(Content content) throws TskCoreException {
         if(this.settings.getSelectedDataSources() == null) {
+            return false;
+        }
+        
+        if (content.getDataSource() == null) {
             return false;
         }
         
@@ -1928,7 +1924,7 @@ class TableReportGenerator {
                     if (attribute.getAttributeType().getValueType() != BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.DATETIME) {
                         return attribute.getDisplayString();
                     } else {
-                        return ContentUtils.getStringTime(attribute.getValueLong(), artData.getContent());
+                        return TimeZoneUtils.getFormattedTime(attribute.getValueLong());
                     }
                 }
             }

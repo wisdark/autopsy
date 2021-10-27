@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2019 Basis Technology Corp.
+ * Copyright 2020 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,7 +21,6 @@ package org.sleuthkit.autopsy.datasourcesummary.uiutils;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.text.DecimalFormat;
 import java.util.List;
 import javax.swing.JLabel;
@@ -30,8 +29,6 @@ import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.labels.PieSectionLabelGenerator;
 import org.jfree.chart.labels.StandardPieSectionLabelGenerator;
-import org.jfree.chart.panel.AbstractOverlay;
-import org.jfree.chart.panel.Overlay;
 import org.jfree.chart.plot.PiePlot;
 import org.jfree.data.general.DefaultPieDataset;
 import org.openide.util.NbBundle.Messages;
@@ -42,92 +39,7 @@ import org.openide.util.NbBundle.Messages;
 @Messages({
     "PieChartPanel_noDataLabel=No Data"
 })
-public class PieChartPanel extends AbstractLoadableComponent<List<PieChartPanel.PieChartItem>> {
-
-    /**
-     * An individual pie chart slice in the pie chart.
-     */
-    public static class PieChartItem {
-
-        private final String label;
-        private final double value;
-        private final Color color;
-
-        /**
-         * Main constructor.
-         *
-         * @param label The label for this pie slice.
-         * @param value The value for this item.
-         * @param color The color for the pie slice. Can be null for
-         *              auto-determined.
-         */
-        public PieChartItem(String label, double value, Color color) {
-            this.label = label;
-            this.value = value;
-            this.color = color;
-        }
-
-        /**
-         * @return The label for this item.
-         */
-        public String getLabel() {
-            return label;
-        }
-
-        /**
-         * @return The value for this item.
-         */
-        public double getValue() {
-            return value;
-        }
-
-        /**
-         * @return The color for the pie slice or null for auto-determined.
-         */
-        public Color getColor() {
-            return color;
-        }
-    }
-
-    /**
-     * A JFreeChart message overlay that can show a message for the purposes of
-     * the LoadableComponent.
-     */
-    private static class MessageOverlay extends AbstractOverlay implements Overlay {
-
-        private static final long serialVersionUID = 1L;
-        private final BaseMessageOverlay overlay = new BaseMessageOverlay();
-
-        // multiply this value by the smaller dimension (height or width) of the component
-        // to determine width of text to be displayed.
-        private static final double MESSAGE_WIDTH_FACTOR = .6;
-
-        /**
-         * Sets this layer visible when painted. In order to be shown in UI,
-         * this component needs to be repainted.
-         *
-         * @param visible Whether or not it is visible.
-         */
-        void setVisible(boolean visible) {
-            overlay.setVisible(visible);
-        }
-
-        /**
-         * Sets the message to be displayed in the child jlabel.
-         *
-         * @param message The message to be displayed.
-         */
-        void setMessage(String message) {
-            overlay.setMessage(message);
-        }
-
-        @Override
-        public void paintOverlay(Graphics2D gd, ChartPanel cp) {
-            int labelWidth = (int) (Math.min(cp.getWidth(), cp.getHeight()) * MESSAGE_WIDTH_FACTOR);
-            overlay.paintOverlay(gd, cp.getWidth(), cp.getHeight(), labelWidth);
-        }
-
-    }
+public class PieChartPanel extends AbstractLoadableComponent<List<PieChartItem>> {
 
     private static final long serialVersionUID = 1L;
 
@@ -146,7 +58,7 @@ public class PieChartPanel extends AbstractLoadableComponent<List<PieChartPanel.
             = new StandardPieSectionLabelGenerator(
                     "{0}: {1} ({2})", new DecimalFormat("#,###"), new DecimalFormat("0.0%"));
 
-    private final MessageOverlay overlay = new MessageOverlay();
+    private final ChartMessageOverlay overlay = new ChartMessageOverlay();
     private final DefaultPieDataset dataset = new DefaultPieDataset();
     private final JFreeChart chart;
     private final PiePlot plot;
@@ -219,12 +131,12 @@ public class PieChartPanel extends AbstractLoadableComponent<List<PieChartPanel.
     }
 
     @Override
-    protected void setResults(List<PieChartPanel.PieChartItem> data) {
+    protected void setResults(List<PieChartItem> data) {
         this.dataset.clear();
         this.plot.clearSectionPaints(false);
 
         if (data != null && !data.isEmpty()) {
-            for (PieChartPanel.PieChartItem slice : data) {
+            for (PieChartItem slice : data) {
                 this.dataset.setValue(slice.getLabel(), slice.getValue());
                 if (slice.getColor() != null) {
                     this.plot.setSectionPaint(slice.getLabel(), slice.getColor());
@@ -242,10 +154,10 @@ public class PieChartPanel extends AbstractLoadableComponent<List<PieChartPanel.
     /**
      * Shows a message on top of data.
      *
-     * @param data    The data.
+     * @param data The data.
      * @param message The message.
      */
-    public synchronized void showDataWithMessage(List<PieChartPanel.PieChartItem> data, String message) {
+    public synchronized void showDataWithMessage(List<PieChartItem> data, String message) {
         setResults(data);
         setMessage(true, message);
         repaint();

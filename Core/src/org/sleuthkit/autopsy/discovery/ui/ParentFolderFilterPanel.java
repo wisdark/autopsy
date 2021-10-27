@@ -24,8 +24,9 @@ import java.util.List;
 import javax.swing.DefaultListModel;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
-import javax.swing.JList;
+import javax.swing.event.ListSelectionListener;
 import org.openide.util.NbBundle;
+import org.sleuthkit.autopsy.coreutils.ThreadConfined;
 import org.sleuthkit.autopsy.discovery.search.SearchFiltering;
 import org.sleuthkit.autopsy.discovery.search.SearchFiltering.ParentSearchTerm;
 
@@ -41,6 +42,7 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
     /**
      * Creates new form ParentFolderFilterPanel.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     ParentFolderFilterPanel() {
         initComponents();
         setUpParentPathFilter();
@@ -49,6 +51,7 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
     /**
      * Initialize the parent path filter.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     private void setUpParentPathFilter() {
         fullRadioButton.setSelected(true);
         includeRadioButton.setSelected(true);
@@ -239,8 +242,9 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
     private javax.swing.JRadioButton substringRadioButton;
     // End of variables declaration//GEN-END:variables
 
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @Override
-    void configurePanel(boolean selected, int[] indicesSelected) {
+    void configurePanel(boolean selected, List<?> selectedItems) {
         parentCheckbox.setSelected(selected);
         if (parentCheckbox.isEnabled() && parentCheckbox.isSelected()) {
             parentScrollPane.setEnabled(true);
@@ -253,9 +257,6 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
             deleteButton.setEnabled(!parentListModel.isEmpty());
             parentList.setEnabled(true);
             parentTextField.setEnabled(true);
-            if (indicesSelected != null) {
-                parentList.setSelectedIndices(indicesSelected);
-            }
         } else {
             parentScrollPane.setEnabled(false);
             parentLabel.setEnabled(false);
@@ -270,16 +271,19 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
         }
     }
 
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @Override
     JCheckBox getCheckbox() {
         return parentCheckbox;
     }
 
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @Override
     JLabel getAdditionalLabel() {
         return parentLabel;
     }
 
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @NbBundle.Messages({"ParentFolderFilterPanel.error.text=At least one parent path must be entered."})
     @Override
     String checkForError() {
@@ -290,6 +294,7 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
         return "";
     }
 
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     /**
      * Utility method to get the parent path objects out of the JList.
      *
@@ -303,11 +308,7 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
         return results;
     }
 
-    @Override
-    JList<?> getList() {
-        return parentList;
-    }
-
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     @Override
     AbstractFilter getFilter() {
         if (parentCheckbox.isSelected()) {
@@ -315,4 +316,15 @@ final class ParentFolderFilterPanel extends AbstractDiscoveryFilterPanel {
         }
         return null;
     }
+    
+    @Override
+    void addListSelectionListener(ListSelectionListener listener) {
+        parentList.addListSelectionListener(listener);
+    }
+
+    @Override
+    boolean isFilterSupported() {
+        return true;
+    }
+
 }

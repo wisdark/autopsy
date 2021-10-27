@@ -1,7 +1,7 @@
 /*
  * Autopsy Forensic Browser
  *
- * Copyright 2020 Basis Technology Corp.
+ * Copyright 2020-2021 Basis Technology Corp.
  * Contact: carrier <at> sleuthkit <dot> org
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +20,8 @@ package org.sleuthkit.autopsy.datasourcesummary.uiutils;
 
 import java.awt.BorderLayout;
 import java.awt.Graphics;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
@@ -32,7 +34,6 @@ import javax.swing.plaf.LayerUI;
 import javax.swing.table.DefaultTableColumnModel;
 import javax.swing.table.TableColumn;
 import javax.swing.table.TableColumnModel;
-import org.sleuthkit.autopsy.datasourcesummary.uiutils.CellModelTableCellRenderer.CellModel;
 
 /**
  * A table that displays a list of items and also can display messages for
@@ -40,10 +41,90 @@ import org.sleuthkit.autopsy.datasourcesummary.uiutils.CellModelTableCellRendere
  */
 public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
 
+    private static final int EXTRA_ROW_HEIGHT = 4;
+
     /**
-     * JTables don't allow displaying messages. So this LayerUI is used to
-     * display the contents of a child JLabel. Inspired by TableWaitLayerTest
-     * (Animating a Busy Indicator):
+     * An event that wraps a swing MouseEvent also providing context within the
+     * table cell.
+     */
+    public static class CellMouseEvent {
+
+        private final MouseEvent e;
+        private final JTable table;
+        private final int row;
+        private final int col;
+        private final Object cellValue;
+
+        /**
+         * Main constructor.
+         *
+         * @param e         The underlying mouse event.
+         * @param table     The table that was the target of the mouse event.
+         * @param row       The row within the table that the event occurs.
+         * @param col       The column within the table that the event occurs.
+         * @param cellValue The value within the cell.
+         */
+        public CellMouseEvent(MouseEvent e, JTable table, int row, int col, Object cellValue) {
+            this.e = e;
+            this.table = table;
+            this.row = row;
+            this.col = col;
+            this.cellValue = cellValue;
+        }
+
+        /**
+         * @return The underlying mouse event.
+         */
+        public MouseEvent getMouseEvent() {
+            return e;
+        }
+
+        /**
+         * @return The table that was the target of the mouse event.
+         */
+        public JTable getTable() {
+            return table;
+        }
+
+        /**
+         * @return The row within the table that the event occurs.
+         */
+        public int getRow() {
+            return row;
+        }
+
+        /**
+         * @return The column within the table that the event occurs.
+         */
+        public int getCol() {
+            return col;
+        }
+
+        /**
+         * @return The value within the cell.
+         */
+        public Object getCellValue() {
+            return cellValue;
+        }
+    }
+
+    /**
+     * Handles mouse events for cells in the table.
+     */
+    public interface CellMouseListener {
+
+        /**
+         * Handles mouse events at a cell level for the table.
+         *
+         * @param e The event containing information about the cell, the mouse
+         *          event, and the table.
+         */
+        void mouseClicked(CellMouseEvent e);
+    }
+
+    /**
+     * This LayerUI is used to display the contents of a child JLabel. Inspired
+     * by TableWaitLayerTest (Animating a Busy Indicator):
      * https://docs.oracle.com/javase/tutorial/uiswing/misc/jlayer.html.
      */
     private static class Overlay extends LayerUI<JComponent> {
@@ -77,65 +158,6 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
         }
     }
 
-    /**
-     * Describes aspects of a column which can be used with getTableModel or
-     * getJTablePanel. 'T' represents the object that will represent rows in the
-     * table.
-     */
-    public static class ColumnModel<T> {
-
-        private final String headerTitle;
-        private final Function<T, CellModelTableCellRenderer.CellModel> cellRenderer;
-        private final Integer width;
-
-        /**
-         * Constructor for a DataResultColumnModel.
-         *
-         * @param headerTitle  The title for the column.
-         * @param cellRenderer The method that generates a CellModel for the
-         *                     column based on the data.
-         */
-        public ColumnModel(String headerTitle, Function<T, CellModelTableCellRenderer.CellModel> cellRenderer) {
-            this(headerTitle, cellRenderer, null);
-        }
-
-        /**
-         * Constructor for a DataResultColumnModel.
-         *
-         * @param headerTitle  The title for the column.
-         * @param cellRenderer The method that generates a CellModel for the
-         *                     column based on the data.
-         * @param width        The preferred width of the column.
-         */
-        public ColumnModel(String headerTitle, Function<T, CellModelTableCellRenderer.CellModel> cellRenderer, Integer width) {
-            this.headerTitle = headerTitle;
-            this.cellRenderer = cellRenderer;
-            this.width = width;
-        }
-
-        /**
-         * @return The title for the column.
-         */
-        public String getHeaderTitle() {
-            return headerTitle;
-        }
-
-        /**
-         * @return The method that generates a CellModel for the column based on
-         *         the data.
-         */
-        public Function<T, CellModel> getCellRenderer() {
-            return cellRenderer;
-        }
-
-        /**
-         * @return The preferred width of the column (can be null).
-         */
-        public Integer getWidth() {
-            return width;
-        }
-    }
-
     private static final long serialVersionUID = 1L;
 
     private static final CellModelTableCellRenderer DEFAULT_CELL_RENDERER = new CellModelTableCellRenderer();
@@ -147,12 +169,12 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
      *
      * @return The corresponding TableColumnModel to be used with a JTable.
      */
-    public static <T> TableColumnModel getTableColumnModel(List<ColumnModel<T>> columns) {
+    public static <T, C extends GuiCellModel> TableColumnModel getTableColumnModel(List<ColumnModel<T, C>> columns) {
         TableColumnModel tableModel = new DefaultTableColumnModel();
 
         for (int i = 0; i < columns.size(); i++) {
             TableColumn col = new TableColumn(i);
-            ColumnModel<T> model = columns.get(i);
+            ColumnModel<T, C> model = columns.get(i);
             // if a preferred width is specified in the column definition, 
             // set the underlying TableColumn preferred width.
             if (model.getWidth() != null && model.getWidth() >= 0) {
@@ -179,12 +201,12 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
      *
      * @return The corresponding ListTableModel.
      */
-    public static <T> ListTableModel<T> getTableModel(List<ColumnModel<T>> columns) {
+    public static <T, C extends GuiCellModel> ListTableModel<T> getTableModel(List<ColumnModel<T, C>> columns) {
         List<Function<T, ? extends Object>> columnRenderers = columns.stream()
                 .map((colModel) -> colModel.getCellRenderer())
                 .collect(Collectors.toList());
 
-        return new DefaultListTableModel<T>(columnRenderers);
+        return new DefaultListTableModel<>(columnRenderers);
     }
 
     /**
@@ -195,16 +217,20 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
      *
      * @return The corresponding JTablePanel.
      */
-    public static <T> JTablePanel<T> getJTablePanel(List<ColumnModel<T>> columns) {
+    public static <T, C extends GuiCellModel> JTablePanel<T> getJTablePanel(List<ColumnModel<T, C>> columns) {
         ListTableModel<T> tableModel = getTableModel(columns);
-        JTablePanel<T> resultTable = new JTablePanel<>(tableModel);
-        return resultTable.setColumnModel(getTableColumnModel(columns));
+        JTablePanel<T> resultTable = new JTablePanel<>(tableModel)
+                .setColumnModel(getTableColumnModel(columns))
+                .setCellListener(CellModelTableCellRenderer.getMouseListener());
+
+        return resultTable;
     }
 
     private JScrollPane tableScrollPane;
     private Overlay overlayLayer;
     private ListTableModel<T> tableModel;
     private JTable table;
+    private CellMouseListener cellListener = null;
     private Function<T, ? extends Object> keyFunction = (rowItem) -> rowItem;
 
     /**
@@ -215,6 +241,7 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
     public JTablePanel(ListTableModel<T> tableModel) {
         this();
         setModel(tableModel);
+        table.setRowHeight(table.getRowHeight() + EXTRA_ROW_HEIGHT);
     }
 
     /**
@@ -222,6 +249,27 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
      */
     public JTablePanel() {
         initComponents();
+        this.table.addMouseListener(new MouseAdapter() {
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                // make sure click event isn't primary button and table is present
+                if (cellListener != null) {
+                    int row = table.rowAtPoint(e.getPoint());
+                    int col = table.columnAtPoint(e.getPoint());
+
+                    // make sure there is a value at the row,col of click event.
+                    if (tableModel != null
+                            && row >= 0 && row < tableModel.getRowCount()
+                            && col >= 0 && col < tableModel.getColumnCount()) {
+
+                        Object cellValue = tableModel.getValueAt(row, col);
+                        cellListener.mouseClicked(new CellMouseEvent(e, table, row, col, cellValue));
+                    }
+                }
+            }
+        });
+        table.setGridColor(javax.swing.UIManager.getDefaults().getColor("InternalFrame.borderColor"));
     }
 
     /**
@@ -239,6 +287,27 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
 
         this.tableModel = tableModel;
         table.setModel(tableModel);
+        return this;
+    }
+
+    /**
+     * @return The current listener for mouse events. The events provided to
+     *         this listener will have cell and table context.
+     */
+    public CellMouseListener getCellListener() {
+        return cellListener;
+    }
+
+    /**
+     * Sets the current listener for mouse events.
+     *
+     * @param cellListener The event listener that will receive these events
+     *                     with cell and table context.
+     *
+     * @return
+     */
+    public JTablePanel<T> setCellListener(CellMouseListener cellListener) {
+        this.cellListener = cellListener;
         return this;
     }
 
@@ -287,6 +356,21 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
         return this;
     }
 
+    /**
+     * Returns the selected items or null if no item is selected.
+     *
+     * @return The selected items or null if no item is selected.
+     */
+    public List<T> getSelectedItems() {
+        int selectedRow = this.table.getSelectedRow();
+        int count = this.table.getSelectedRowCount();
+        if (selectedRow < 0 || this.tableModel == null || selectedRow + count > this.tableModel.getDataRows().size()) {
+            return null;
+        } else {
+            return this.tableModel.getDataRows().subList(selectedRow, selectedRow + count);
+        }
+    }
+
     @Override
     protected synchronized void setResults(List<T> data) {
         // get previously selected value
@@ -295,7 +379,7 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
         T prevValue = (tableRows != null && prevSelectedRow >= 0 && prevSelectedRow < tableRows.size())
                 ? this.tableModel.getDataRows().get(prevSelectedRow)
                 : null;
-        
+
         Object prevKeyValue = (prevValue == null) ? null : this.keyFunction.apply(prevValue);
 
         // set the list of data to be shown as either the data or an empty list 
@@ -330,7 +414,6 @@ public class JTablePanel<T> extends AbstractLoadableComponent<List<T>> {
     private void initComponents() {
         table = new JTable();
         table.getTableHeader().setReorderingAllowed(false);
-
         overlayLayer = new Overlay();
         tableScrollPane = new JScrollPane(table);
         JLayer<JComponent> dualLayer = new JLayer<>(tableScrollPane, overlayLayer);

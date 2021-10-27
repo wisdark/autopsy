@@ -20,10 +20,11 @@ package org.sleuthkit.autopsy.discovery.ui;
 
 import org.sleuthkit.autopsy.discovery.search.AbstractFilter;
 import java.awt.event.ActionListener;
+import java.util.List;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.event.ListSelectionListener;
+import org.sleuthkit.autopsy.coreutils.ThreadConfined;
 
 /**
  * Abstract class extending JPanel for filter controls.
@@ -41,23 +42,24 @@ abstract class AbstractDiscoveryFilterPanel extends javax.swing.JPanel {
      *                        selected, null to indicate leaving selected items
      *                        unchanged or that there are no items to select.
      */
-    abstract void configurePanel(boolean selected, int[] indicesSelected);
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
+    abstract void configurePanel(boolean selected, List<?> selectedItems);
 
     /**
      * Get the checkbox which enables and disables this filter.
      *
      * @return The JCheckBox which enables and disables this filter.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     abstract JCheckBox getCheckbox();
 
     /**
-     * Get the list of values associated with this filter if one exists. If one
-     * does not exist this should return null.
+     * Add a list selection listener to the filter list in this panel
      *
-     * @return The JList which contains the values available for selection for
-     *         this filter.
+     * @param listener The list selection listener to add.
      */
-    abstract JList<?> getList();
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
+    abstract void addListSelectionListener(ListSelectionListener listener);
 
     /**
      * Get any additional text that should be displayed under the checkbox. If
@@ -65,6 +67,7 @@ abstract class AbstractDiscoveryFilterPanel extends javax.swing.JPanel {
      *
      * @return The JLabel to display under the JCheckBox.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     abstract JLabel getAdditionalLabel();
 
     /**
@@ -73,6 +76,7 @@ abstract class AbstractDiscoveryFilterPanel extends javax.swing.JPanel {
      * @return If the settings are invalid returns the error that has occurred,
      *         otherwise returns empty string.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     abstract String checkForError();
 
     /**
@@ -82,12 +86,13 @@ abstract class AbstractDiscoveryFilterPanel extends javax.swing.JPanel {
      * @param actionlistener The listener for the checkbox selection events.
      * @param listListener   The listener for the list selection events.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     void addListeners(ActionListener actionListener, ListSelectionListener listListener) {
         if (getCheckbox() != null) {
             getCheckbox().addActionListener(actionListener);
         }
-        if (getList() != null) {
-            getList().addListSelectionListener(listListener);
+        if (hasPanel() == true) {
+            addListSelectionListener(listListener);
         }
     }
 
@@ -97,23 +102,13 @@ abstract class AbstractDiscoveryFilterPanel extends javax.swing.JPanel {
      * @return The AbstractFilter for the selected settings, null if the
      *         settings are not in use.
      */
+    @ThreadConfined(type = ThreadConfined.ThreadType.AWT)
     abstract AbstractFilter getFilter();
 
     /**
-     * Remove listeners from the checkbox and the list if they exist.
+     * Get whether or not the filter has sufficient options to be used.
      */
-    void removeListeners() {
-        if (getCheckbox() != null) {
-            for (ActionListener listener : getCheckbox().getActionListeners()) {
-                getCheckbox().removeActionListener(listener);
-            }
-        }
-        if (getList() != null) {
-            for (ListSelectionListener listener : getList().getListSelectionListeners()) {
-                getList().removeListSelectionListener(listener);
-            }
-        }
-    }
+    abstract boolean isFilterSupported();
 
     /**
      * Return whether or not this filter has a panel.

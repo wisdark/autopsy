@@ -213,6 +213,7 @@ public class HTMLReport implements TableReportModule {
      * Copies a suitable icon for the given data type in the output directory
      * and returns the icon file name to use for the given data type.
      */
+    @SuppressWarnings( "deprecation" )
     private String useDataTypeIcon(String dataType) {
         String iconFilePath;
         String iconFileName;
@@ -383,6 +384,24 @@ public class HTMLReport implements TableReportModule {
                     break;
                 case TSK_WEB_FORM_ADDRESS:
                     in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/web-form-address.png"); //NON-NLS
+                    break;
+                case TSK_GPS_AREA:
+                    in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/gps-area.png"); //NON-NLS
+                    break;
+                case TSK_WEB_CATEGORIZATION:
+                    in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/domain-16.png"); //NON-NLS
+                    break;
+                case TSK_YARA_HIT:
+                    in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/yara_16.png"); //NON-NLS
+                    break;
+                case TSK_PREVIOUSLY_SEEN:
+                    in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/previously-seen.png"); //NON-NLS
+                    break;
+                case TSK_PREVIOUSLY_UNSEEN:
+                    in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/previously-unseen.png"); //NON-NLS
+                    break;
+                case TSK_PREVIOUSLY_NOTABLE:
+                    in = getClass().getResourceAsStream("/org/sleuthkit/autopsy/images/red-circle-exclamation.png"); //NON-NLS
                     break;
                 default:
                     logger.log(Level.WARNING, "useDataTypeIcon: unhandled artifact type = {0}", dataType); //NON-NLS
