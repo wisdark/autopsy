@@ -48,7 +48,7 @@ class ProfilePanel extends IngestModuleGlobalSettingsPanel {
     ProfilePanel() {
         initComponents();
         setName(org.openide.util.NbBundle.getMessage(ProfilePanel.class, "ProfilePanel.title.text"));
-        settings = new IngestJobSettings(NEW_PROFILE_NAME);
+        settings = new IngestJobSettings(IngestProfiles.getExecutionContext(NEW_PROFILE_NAME));
         ingestSettingsPanel = new IngestJobSettingsPanel(settings);
         ingestSettingsPanel.setPastJobsButtonVisible(false);
         jPanel1.add(ingestSettingsPanel, 0);
@@ -61,7 +61,7 @@ class ProfilePanel extends IngestModuleGlobalSettingsPanel {
         profile = selectedProfile;
         profileDescArea.setText(profile.getDescription());
         profileNameField.setText(profile.getName());
-        settings = new IngestJobSettings(selectedProfile.getName());
+        settings = new IngestJobSettings(IngestProfiles.getExecutionContext(selectedProfile.getName()));
         ingestSettingsPanel = new IngestJobSettingsPanel(settings);
         ingestSettingsPanel.setPastJobsButtonVisible(false);
         jPanel1.add(ingestSettingsPanel, 0);
@@ -85,7 +85,15 @@ class ProfilePanel extends IngestModuleGlobalSettingsPanel {
     IngestJobSettings getSettings() {
         return ingestSettingsPanel.getSettings();
     }
-
+    
+    String getIngestProfileName() {
+        if (profile != null) {
+            return profile.getName();
+        } else {
+            return NEW_PROFILE_NAME;
+        }
+    }
+    
     /**
      * This method is called from within the constructor to initialize the form.
      * WARNING: Do NOT modify this code. The content of this method is always
@@ -220,7 +228,7 @@ class ProfilePanel extends IngestModuleGlobalSettingsPanel {
         }
         profile = new IngestProfile(getProfileName(), profileDescArea.getText(), ingestSettingsPanel.getSettings().getFileFilter().getName());
         IngestProfile.saveProfile(profile);
-        ingestSettingsPanel.getSettings().saveAs(getProfileName());
+        ingestSettingsPanel.getSettings().saveAs(IngestProfiles.getExecutionContext(getProfileName()));
     }
 
     /**
