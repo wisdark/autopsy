@@ -57,6 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import static java.util.stream.Collectors.toList;
+import javax.swing.JOptionPane;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.client.solrj.SolrServerException;
@@ -82,6 +83,7 @@ import org.apache.solr.common.util.NamedList;
 import org.openide.modules.InstalledFileLocator;
 import org.openide.modules.Places;
 import org.openide.util.NbBundle;
+import org.openide.util.NbBundle.Messages;
 import org.openide.windows.WindowManager;
 import org.sleuthkit.autopsy.casemodule.Case;
 import org.sleuthkit.autopsy.casemodule.Case.CaseType;
@@ -583,7 +585,7 @@ public class Server {
         List<Long> pids = new ArrayList<>();
 
         //NOTE: these needs to be in sync with process start string in start()
-        final String pidsQuery = "Args.*.eq=-DSTOP.KEY=" + KEY + ",Args.*.eq=start.jar"; //NON-NLS
+        final String pidsQuery = "-DSTOP.KEY=" + KEY + "%start.jar"; //NON-NLS
 
         long[] pidsArr = PlatformUtil.getJavaPIDs(pidsQuery);
         if (pidsArr != null) {
@@ -611,18 +613,22 @@ public class Server {
         startLocalSolr(SOLR_VERSION.SOLR8);
     }
     
+    @Messages({
+        "# {0} - indexVersion",
+        "Server_configureSolrConnection_illegalSolrVersion=The solr version in the case: {0}, is not supported."
+    })
     private void configureSolrConnection(Case theCase, Index index) throws KeywordSearchModuleException, SolrServerNoPortException {
         
         try {
             if (theCase.getCaseType() == CaseType.SINGLE_USER_CASE) {
 
                 // makes sure the proper local Solr server is running
-                if (IndexFinder.getCurrentSolrVersion().equals(index.getSolrVersion())) {
-                    startLocalSolr(SOLR_VERSION.SOLR8);
-                } else {
-                    startLocalSolr(SOLR_VERSION.SOLR4);
+                if (!IndexFinder.getCurrentSolrVersion().equals(index.getSolrVersion())) {
+                    throw new KeywordSearchModuleException(Bundle.Server_configureSolrConnection_illegalSolrVersion(index.getSolrVersion()));
                 }
 
+                startLocalSolr(SOLR_VERSION.SOLR8);
+                
                 // check if the local Solr server is running
                 if (!this.isLocalSolrRunning()) {
                     logger.log(Level.SEVERE, "Local Solr server is not running"); //NON-NLS
@@ -684,8 +690,7 @@ public class Server {
         if (version == SOLR_VERSION.SOLR8) {
             localSolrFolder = InstalledFileLocator.getDefault().locate("solr", Server.class.getPackage().getName(), false); //NON-NLS
         } else {
-            // solr4
-            localSolrFolder = InstalledFileLocator.getDefault().locate("solr4", Server.class.getPackage().getName(), false); //NON-NLS
+            throw new KeywordSearchModuleException(Bundle.Server_configureSolrConnection_illegalSolrVersion(version.name()));
         }
 
         if (isLocalSolrRunning()) {
@@ -1635,23 +1640,29 @@ public class Server {
     }
 
     /**
-     * Return true if the file is indexed (either as a whole as a chunk)
+     * Return true if the file is fully indexed (no chunks are missing)
      *
      * @param contentID
      *
-     * @return true if it is indexed
+     * @return true if it is fully indexed
      *
      * @throws KeywordSearchModuleException
      * @throws NoOpenCoreException
      */
-    public boolean queryIsIndexed(long contentID) throws KeywordSearchModuleException, NoOpenCoreException {
+    public boolean queryIsFullyIndexed(long contentID) throws KeywordSearchModuleException, NoOpenCoreException {
         currentCoreLock.readLock().lock();
         try {
             if (null == currentCollection) {
                 throw new NoOpenCoreException();
             }
             try {
-                return currentCollection.queryIsIndexed(contentID);
+                int totalNumChunks = currentCollection.queryTotalNumFileChunks(contentID);
+                if (totalNumChunks == 0) {
+                    return false;
+                }
+
+                int numIndexedChunks = currentCollection.queryNumIndexedChunks(contentID);
+                return numIndexedChunks == totalNumChunks;
             } catch (Exception ex) {
                 // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryIsIdxd.exception.msg"), ex);
@@ -1680,7 +1691,7 @@ public class Server {
                 throw new NoOpenCoreException();
             }
             try {
-                return currentCollection.queryNumFileChunks(fileID);
+                return currentCollection.queryTotalNumFileChunks(fileID);
             } catch (Exception ex) {
                 // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
                 throw new KeywordSearchModuleException(NbBundle.getMessage(this.getClass(), "Server.queryNumFileChunks.exception.msg"), ex);
@@ -2484,7 +2495,7 @@ public class Server {
         }
 
         /**
-         * Return true if the file is indexed (either as a whole as a chunk)
+         * Return true if the file is indexed (either as a whole or as a chunk)
          *
          * @param contentID
          *
@@ -2502,22 +2513,59 @@ public class Server {
         }
 
         /**
-         * Execute query that gets number of indexed file chunks for a file
+         * Execute query that gets total number of file chunks for a file. NOTE:
+         * this does not imply that all of the chunks have been indexed. This
+         * parameter simply stores the total number of chunks that the file had
+         * (as determined during chunking).
          *
          * @param contentID file id of the original file broken into chunks and
-         * indexed
+         *                  indexed
          *
-         * @return int representing number of indexed file chunks, 0 if there is
-         * no chunks
+         * @return int representing number of file chunks, 0 if there is no
+         *         chunks
          *
          * @throws SolrServerException
          */
-        private int queryNumFileChunks(long contentID) throws SolrServerException, IOException {
-            String id = KeywordSearchUtil.escapeLuceneQuery(Long.toString(contentID));
-            final SolrQuery q
-                    = new SolrQuery(Server.Schema.ID + ":" + id + Server.CHUNK_ID_SEPARATOR + "*");
+        private int queryTotalNumFileChunks(long contentID) throws SolrServerException, IOException {
+            final SolrQuery q = new SolrQuery();
+            q.setQuery("*:*");
+            String filterQuery = Schema.ID.toString() + ":" + KeywordSearchUtil.escapeLuceneQuery(Long.toString(contentID));
+            q.addFilterQuery(filterQuery);
+            q.setFields(Schema.NUM_CHUNKS.toString());
+            try {
+                SolrDocumentList solrDocuments = query(q).getResults();
+                if (!solrDocuments.isEmpty()) {
+                    SolrDocument solrDocument = solrDocuments.get(0);
+                    if (solrDocument != null && !solrDocument.isEmpty()) {
+                        Object fieldValue = solrDocument.getFieldValue(Schema.NUM_CHUNKS.toString());
+                        return (Integer)fieldValue;
+                    }
+                } 
+            } catch (Exception ex) {
+                // intentional "catch all" as Solr is known to throw all kinds of Runtime exceptions
+                logger.log(Level.SEVERE, "Error getting content from Solr. Solr document id " + contentID + ", query: " + filterQuery, ex); //NON-NLS
+                return 0;
+            }
+            // File not indexed
+            return 0;
+        }
+        
+        /**
+         * Execute query that gets number of indexed chunks for a specific Solr
+         * document, without actually returning the content.
+         *
+         * @param contentID file id of the original file broken into chunks and
+         *                  indexed
+         *
+         * @return int representing number of indexed chunks
+         *
+         * @throws SolrServerException
+         */
+        int queryNumIndexedChunks(long contentID) throws SolrServerException, IOException {
+            SolrQuery q = new SolrQuery(Server.Schema.ID + ":" + KeywordSearchUtil.escapeLuceneQuery(Long.toString(contentID)) + Server.CHUNK_ID_SEPARATOR + "*");
             q.setRows(0);
-            return (int) query(q).getResults().getNumFound();
+            int numChunks = (int) query(q).getResults().getNumFound();
+            return numChunks;
         }
     }
 

@@ -71,7 +71,7 @@ public class ILeappAnalyzerIngestModule implements DataSourceIngestModule {
     private static final String ILEAPP_EXECUTABLE = "ileapp.exe";//NON-NLS
     private static final String ILEAPP_PATHS_FILE = "iLeapp_paths.txt"; //NON-NLS
 
-    private static final String XMLFILE = "ileap-artifact-attribute-reference.xml"; //NON-NLS
+    private static final String XMLFILE = "ileapp-artifact-attribute-reference.xml"; //NON-NLS
 
     private File iLeappExecutable;
 
@@ -100,7 +100,7 @@ public class ILeappAnalyzerIngestModule implements DataSourceIngestModule {
         }
 
         try {
-            iLeappFileProcessor = new LeappFileProcessor(XMLFILE, ILeappAnalyzerModuleFactory.getModuleName(), context);
+            iLeappFileProcessor = new LeappFileProcessor(XMLFILE, ILeappAnalyzerModuleFactory.getModuleName(), ILEAPP, context);
         } catch (IOException | IngestModuleException | NoCurrentCaseException ex) {
             throw new IngestModuleException(Bundle.ILeappAnalyzerIngestModule_error_ileapp_file_processor_init(), ex);
         }
@@ -289,11 +289,12 @@ public class ILeappAnalyzerIngestModule implements DataSourceIngestModule {
     private ProcessBuilder buildiLeappCommand(Path moduleOutputPath, String sourceFilePath, String iLeappFileSystemType) {
 
         ProcessBuilder processBuilder = buildProcessWithRunAsInvoker(
-                "\"" + iLeappExecutable + "\"", //NON-NLS
+                iLeappExecutable.getAbsolutePath(), //NON-NLS
                 "-t", iLeappFileSystemType, //NON-NLS
                 "-i", sourceFilePath, //NON-NLS
                 "-o", moduleOutputPath.toString()
         );
+        processBuilder.directory(moduleOutputPath.toFile());
         processBuilder.redirectError(moduleOutputPath.resolve("iLeapp_err.txt").toFile());  //NON-NLS
         processBuilder.redirectOutput(moduleOutputPath.resolve("iLeapp_out.txt").toFile());  //NON-NLS
         return processBuilder;
@@ -309,9 +310,11 @@ public class ILeappAnalyzerIngestModule implements DataSourceIngestModule {
     private ProcessBuilder buildiLeappListCommand(Path moduleOutputPath) {
 
         ProcessBuilder processBuilder = buildProcessWithRunAsInvoker(
-                "\"" + iLeappExecutable + "\"", //NON-NLS
+                iLeappExecutable.getAbsolutePath(), //NON-NLS
                 "-p"
         );
+        // leapp process also outputs a file to the working directory in addition to stdout.
+        processBuilder.directory(moduleOutputPath.toFile());
         processBuilder.redirectError(moduleOutputPath.resolve("iLeapp_paths_error.txt").toFile());  //NON-NLS
         processBuilder.redirectOutput(moduleOutputPath.resolve("iLeapp_paths.txt").toFile());  //NON-NLS
         return processBuilder;

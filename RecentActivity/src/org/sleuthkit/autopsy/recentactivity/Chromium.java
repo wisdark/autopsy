@@ -29,6 +29,7 @@ import com.google.gson.JsonIOException;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
+import java.io.BufferedReader;
 import org.openide.util.NbBundle;
 import org.sleuthkit.autopsy.datamodel.ContentUtils;
 import java.util.logging.Level;
@@ -51,6 +52,7 @@ import org.sleuthkit.autopsy.casemodule.NoCurrentCaseException;
 import org.sleuthkit.autopsy.casemodule.services.FileManager;
 import org.sleuthkit.autopsy.coreutils.Logger;
 import org.sleuthkit.autopsy.coreutils.NetworkUtils;
+import org.sleuthkit.autopsy.coreutils.PlatformUtil;
 import org.sleuthkit.autopsy.ingest.DataSourceIngestModuleProgress;
 import org.sleuthkit.autopsy.ingest.IngestJobContext;
 import org.sleuthkit.datamodel.AbstractFile;
@@ -105,10 +107,14 @@ class Chromium extends Extract {
     private static final String FAVICON_ARTIFACT_NAME = "TSK_FAVICON"; //NON-NLS
     private static final String LOCAL_STATE_ARTIFACT_NAME = "TSK_LOCAL_STATE"; //NON-NLS
     private static final String EXTENSIONS_ARTIFACT_NAME = "TSK_CHROME_EXTENSIONS"; //NON-NLS
-
+    private static final String MALICIOUS_EXTENSION_FOUND = "Malicious Extension Found - ";
+    
     private Boolean databaseEncrypted = false;
     private Boolean fieldEncrypted = false;
 
+    private static final String MALICIOUS_CHROME_EXTENSION_LIST = "malicious_chrome_extensions.csv";
+    private Map<String, String> maliciousChromeExtensions;
+    
     private final Logger logger = Logger.getLogger(this.getClass().getName());
     private Content dataSource;
     private final IngestJobContext context;
@@ -154,7 +160,8 @@ class Chromium extends Extract {
         this.dataSource = dataSource;
         dataFound = false;
         long ingestJobId = context.getJobId();
-
+        String now1 = "";
+        loadMaliciousChromeExetnsions();
         userProfiles = new HashMap<>();
         browserLocations = new HashMap<>();
         for (Map.Entry<String, String> browser : BROWSERS_MAP.entrySet()) {
@@ -313,6 +320,8 @@ class Chromium extends Extract {
                     jProfile = jElement.get("profile").getAsJsonObject(); //NON-NLS
                     jInfoCache = jProfile.get("info_cache").getAsJsonObject();
                 } else {
+                    userProfiles.put(browserLocation, "Default");
+                    browserLocations.put(browserLocation, browser);                    
                     continue;
                 }
             } catch (JsonIOException | JsonSyntaxException | IllegalStateException ex) {
@@ -607,10 +616,16 @@ class Chromium extends Extract {
                     version = "";
                     description = "";
                     extName = "";
-                }                
+                }      
+                BlackboardArtifact art = null;
                 Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
                 bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_ID,
                         RecentActivityExtracterModuleFactory.getModuleName(), extension));
+                if (maliciousChromeExtensions.get(extension) != null) {
+                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_COMMENT,
+                        RecentActivityExtracterModuleFactory.getModuleName(), 
+                        MALICIOUS_EXTENSION_FOUND + maliciousChromeExtensions.getOrDefault(extension, "No Source Identified")));
+                }
                 bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_NAME,
                         RecentActivityExtracterModuleFactory.getModuleName(), extName));
                 bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DESCRIPTION,
@@ -627,11 +642,11 @@ class Chromium extends Extract {
                         RecentActivityExtracterModuleFactory.getModuleName(), browserName));
 
                 try {
-                    bbartifacts.add(createArtifactWithAttributes(localStateArtifactType, extensionFile, bbattributes));
+                    art = createArtifactWithAttributes(localStateArtifactType, extensionFile, bbattributes);
+                    bbartifacts.add(art);
                 } catch (TskCoreException ex) {
                     logger.log(Level.SEVERE, String.format("Failed to create Extension artifact for file (%d)", extensionFile.getId()), ex);
                 }
-
             }
 
             if (!context.dataSourceIngestIsCancelled()) {
@@ -841,60 +856,62 @@ class Chromium extends Extract {
             Set<String> bookmarkKeys = jRoot.keySet();
             for (String bookmarkKey : bookmarkKeys) {
                 JsonObject jBookmark = jRoot.get(bookmarkKey).getAsJsonObject(); //NON-NLS
-                JsonArray jBookmarkArray = jBookmark.getAsJsonArray("children"); //NON-NLS
-                for (JsonElement result : jBookmarkArray) {
-                    JsonObject address = result.getAsJsonObject();
-                    if (address == null) {
-                        continue;
-                    }
-                    JsonElement urlEl = address.get("url"); //NON-NLS
-                    String url;
-                    if (urlEl != null) {
-                        url = urlEl.getAsString();
-                    } else {
-                        url = "";
-                    }
-                    String name;
-                    JsonElement nameEl = address.get("name"); //NON-NLS
-                    if (nameEl != null) {
-                        name = nameEl.getAsString();
-                    } else {
-                        name = "";
-                    }
-                    Long date;
-                    JsonElement dateEl = address.get("date_added"); //NON-NLS
-                    if (dateEl != null) {
-                        date = dateEl.getAsLong();
-                    } else {
-                        date = Long.valueOf(0);
-                    }
-                    String domain = NetworkUtils.extractDomain(url);
-                    Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
-                    //TODO Revisit usage of deprecated constructor as per TSK-583
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_URL,
-                            RecentActivityExtracterModuleFactory.getModuleName(), url));
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_TITLE,
-                            RecentActivityExtracterModuleFactory.getModuleName(), name));
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME_CREATED,
-                            RecentActivityExtracterModuleFactory.getModuleName(), (date / 1000000) - Long.valueOf("11644473600")));
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PROG_NAME,
-                            RecentActivityExtracterModuleFactory.getModuleName(), browserName));
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DOMAIN,
-                            RecentActivityExtracterModuleFactory.getModuleName(), domain));
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_NAME,
-                            RecentActivityExtracterModuleFactory.getModuleName(), userName));
-                    bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_COMMENT,
-                            RecentActivityExtracterModuleFactory.getModuleName(), bookmarkKey));
+                if (jBookmark.has("children")) {
+                    JsonArray jBookmarkArray = jBookmark.getAsJsonArray("children"); //NON-NLS
+                    for (JsonElement result : jBookmarkArray) {
+                        JsonObject address = result.getAsJsonObject();
+                        if (address == null) {
+                            continue;
+                        }
+                        JsonElement urlEl = address.get("url"); //NON-NLS
+                        String url;
+                        if (urlEl != null) {
+                            url = urlEl.getAsString();
+                        } else {
+                            url = "";
+                        }
+                        String name;
+                        JsonElement nameEl = address.get("name"); //NON-NLS
+                        if (nameEl != null) {
+                            name = nameEl.getAsString();
+                        } else {
+                            name = "";
+                        }
+                        Long date;
+                        JsonElement dateEl = address.get("date_added"); //NON-NLS
+                        if (dateEl != null) {
+                            date = dateEl.getAsLong();
+                        } else {
+                            date = Long.valueOf(0);
+                        }
+                        String domain = NetworkUtils.extractDomain(url);
+                        Collection<BlackboardAttribute> bbattributes = new ArrayList<>();
+                        //TODO Revisit usage of deprecated constructor as per TSK-583
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_URL,
+                                RecentActivityExtracterModuleFactory.getModuleName(), url));
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_TITLE,
+                                RecentActivityExtracterModuleFactory.getModuleName(), name));
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DATETIME_CREATED,
+                                RecentActivityExtracterModuleFactory.getModuleName(), (date / 1000000) - Long.valueOf("11644473600")));
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_PROG_NAME,
+                                RecentActivityExtracterModuleFactory.getModuleName(), browserName));
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_DOMAIN,
+                                RecentActivityExtracterModuleFactory.getModuleName(), domain));
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_USER_NAME,
+                                RecentActivityExtracterModuleFactory.getModuleName(), userName));
+                        bbattributes.add(new BlackboardAttribute(ATTRIBUTE_TYPE.TSK_COMMENT,
+                                RecentActivityExtracterModuleFactory.getModuleName(), bookmarkKey));
 
 
-                    try {
-                        bbartifacts.add(createArtifactWithAttributes(BlackboardArtifact.Type.TSK_WEB_BOOKMARK, bookmarkFile, bbattributes));
-                    } catch (TskCoreException ex) {
-                        logger.log(Level.SEVERE, String.format("Failed to create bookmark artifact for file (%d)", bookmarkFile.getId()), ex);
-                    }
+                        try {
+                            bbartifacts.add(createArtifactWithAttributes(BlackboardArtifact.Type.TSK_WEB_BOOKMARK, bookmarkFile, bbattributes));
+                        } catch (TskCoreException ex) {
+                            logger.log(Level.SEVERE, String.format("Failed to create bookmark artifact for file (%d)", bookmarkFile.getId()), ex);
+                        }
 
+                    }
                 }
-            }
+             }
             
             if (!context.dataSourceIngestIsCancelled()) {
                 postArtifacts(bbartifacts);
@@ -1674,4 +1691,35 @@ class Chromium extends Extract {
         return faviconArtifactType;
     }
 
+    /**
+     * Load the malicious chrome extension file to check
+     */
+    private void loadMaliciousChromeExetnsions() {
+        maliciousChromeExtensions = new HashMap<>();
+        try {
+            configExtractor();
+            String malChromeExtenList = PlatformUtil.getUserConfigDirectory() + File.separator + MALICIOUS_CHROME_EXTENSION_LIST;
+            BufferedReader csvReader = new BufferedReader(new FileReader(malChromeExtenList));
+            String row;
+            while ((row = csvReader.readLine()) != null) {
+                if (!row.startsWith("#", 0)) {
+                    String[] data = row.split(",");
+                    maliciousChromeExtensions.put(data[0], data[1]);
+                }
+            }
+        } catch (IOException ex) {
+            logger.log(Level.SEVERE, String.format("Failed to load Malicious Chrome Extension List file (%s)", MALICIOUS_CHROME_EXTENSION_LIST), ex);
+        }
+    }
+
+    /**
+     * Extract the malicious chrome extension config csv file to the user directory to process
+     *
+     * @throws org.sleuthkit.autopsy.ingest.IngestModule.IngestModuleException
+     */
+    private void configExtractor() throws IOException {
+        PlatformUtil.extractResourceToUserConfigDir(Chromium.class,
+                MALICIOUS_CHROME_EXTENSION_LIST, true);
+    }
+    
 }

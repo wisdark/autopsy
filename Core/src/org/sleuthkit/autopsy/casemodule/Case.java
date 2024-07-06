@@ -18,6 +18,7 @@
  */
 package org.sleuthkit.autopsy.casemodule;
 
+import com.basistech.df.cybertriage.autopsy.CTIntegrationMissingDialog;
 import org.sleuthkit.autopsy.featureaccess.FeatureAccessUtils;
 import com.google.common.annotations.Beta;
 import com.google.common.eventbus.Subscribe;
@@ -40,8 +41,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -64,6 +65,7 @@ import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.openide.util.Lookup;
 import org.openide.util.NbBundle;
@@ -133,8 +135,6 @@ import org.sleuthkit.autopsy.events.AutopsyEventPublisher;
 import org.sleuthkit.autopsy.discovery.ui.OpenDiscoveryAction;
 import org.sleuthkit.autopsy.ingest.IngestJob;
 import org.sleuthkit.autopsy.ingest.IngestManager;
-import org.sleuthkit.autopsy.ingest.IngestServices;
-import org.sleuthkit.autopsy.ingest.ModuleDataEvent;
 import org.sleuthkit.autopsy.keywordsearchservice.KeywordSearchService;
 import org.sleuthkit.autopsy.keywordsearchservice.KeywordSearchServiceException;
 import org.sleuthkit.autopsy.machinesettings.UserMachinePreferences;
@@ -143,18 +143,15 @@ import org.sleuthkit.autopsy.progress.ModalDialogProgressIndicator;
 import org.sleuthkit.autopsy.progress.ProgressIndicator;
 import org.sleuthkit.autopsy.timeline.OpenTimelineAction;
 import org.sleuthkit.autopsy.timeline.events.TimelineEventAddedEvent;
-import org.sleuthkit.datamodel.Blackboard;
-import org.sleuthkit.datamodel.BlackboardArtifact;
 import org.sleuthkit.datamodel.BlackboardArtifactTag;
 import org.sleuthkit.datamodel.CaseDbConnectionInfo;
+import org.sleuthkit.datamodel.ConcurrentDbAccessException;
 import org.sleuthkit.datamodel.Content;
+import org.sleuthkit.datamodel.ContentStreamProvider;
 import org.sleuthkit.datamodel.ContentTag;
 import org.sleuthkit.datamodel.DataSource;
 import org.sleuthkit.datamodel.FileSystem;
-import org.sleuthkit.datamodel.Host;
 import org.sleuthkit.datamodel.Image;
-import org.sleuthkit.datamodel.OsAccount;
-import org.sleuthkit.datamodel.Person;
 import org.sleuthkit.datamodel.Report;
 import org.sleuthkit.datamodel.SleuthkitCase;
 import org.sleuthkit.datamodel.TimelineManager;
@@ -184,6 +181,7 @@ public class Case {
     private static final String CASE_ACTION_THREAD_NAME = "%s-case-action";
     private static final String CASE_RESOURCES_THREAD_NAME = "%s-manage-case-resources";
     private static final String NO_NODE_ERROR_MSG_FRAGMENT = "KeeperErrorCode = NoNode";
+    private static final String CT_PROVIDER_PREFIX = "CTStandardContentProvider_";
     private static final Logger logger = Logger.getLogger(Case.class.getName());
     private static final AutopsyEventPublisher eventPublisher = new AutopsyEventPublisher();
     private static final Object caseActionSerializationLock = new Object();
@@ -1308,9 +1306,11 @@ public class Case {
         for (Map.Entry<Long, String> entry : imgPaths.entrySet()) {
             long obj_id = entry.getKey();
             String path = entry.getValue();
-            boolean fileExists = (new File(path).isFile() || DriveUtils.driveExists(path));
+            boolean fileExists = (new File(path).exists()|| DriveUtils.driveExists(path));
             if (!fileExists) {
                 try {
+                    DataSource ds = newCurrentCase.getSleuthkitCase().getDataSource(obj_id);
+                    String hostName = StringUtils.defaultString(ds.getHost() == null ? "" : ds.getHost().getName());
                     // Using invokeAndWait means that the dialog will
                     // open on the EDT but this thread will wait for an 
                     // answer. Using invokeLater would cause this loop to
@@ -1320,7 +1320,7 @@ public class Case {
                         public void run() {
                             int response = JOptionPane.showConfirmDialog(
                                     mainFrame,
-                                    NbBundle.getMessage(Case.class, "Case.checkImgExist.confDlg.doesntExist.msg", path),
+                                    NbBundle.getMessage(Case.class, "Case.checkImgExist.confDlg.doesntExist.msg", hostName, path),
                                     NbBundle.getMessage(Case.class, "Case.checkImgExist.confDlg.doesntExist.title"),
                                     JOptionPane.YES_NO_OPTION);
                             if (response == JOptionPane.YES_OPTION) {
@@ -1332,7 +1332,7 @@ public class Case {
                         }
 
                     });
-                } catch (InterruptedException | InvocationTargetException ex) {
+                } catch (InterruptedException | InvocationTargetException | TskCoreException | TskDataException ex) {
                     logger.log(Level.SEVERE, "Failed to show missing image confirmation dialog", ex); //NON-NLS 
                 }
             }
@@ -2078,7 +2078,7 @@ public class Case {
         metadata = caseMetaData;
         sleuthkitEventListener = new SleuthkitEventListener();
     }
-
+   
     /**
      * Performs a case action that involves creating or opening a case. If the
      * case is a multi-user case, the action is done after acquiring a
@@ -2287,6 +2287,8 @@ public class Case {
             checkForCancellation();
             openCommunicationChannels(progressIndicator);
             checkForCancellation();
+            checkImagePaths();
+            checkForCancellation();
             openFileSystemsInBackground();
             return null;
 
@@ -2303,6 +2305,40 @@ public class Case {
             }
             close(progressIndicator);
             throw ex;
+        }
+    }
+    
+    /**
+     * Check if content provider is present, all images have paths, or throw an error.
+     * @throws CaseActionException 
+     */
+    @Messages({
+        "# {0} - paths",
+        "Case_checkImagePaths_noPaths=The following images had no associated paths: {0}",
+        "Case_checkImagePaths_exceptionOccurred=An exception occurred while checking if image paths are present"
+    })
+    private void checkImagePaths() throws CaseActionException {
+        // if there is a content provider, images don't necessarily need paths
+        if (StringUtils.isNotBlank(this.metadata.getContentProviderName())) {
+            return;
+        }
+        
+        // identify images without paths
+        try {
+            List<Image> noPathImages = new ArrayList<>();
+            List<Image> images = this.caseDb.getImages();
+            for (Image img: images) {
+                if (ArrayUtils.isEmpty(img.getPaths())) {
+                    noPathImages.add(img);
+                }
+            }
+            
+            if (!noPathImages.isEmpty()) {
+                String imageListStr = noPathImages.stream().map(Image::getName).collect(Collectors.joining(", "));
+                throw new CaseActionException(Bundle.Case_checkImagePaths_noPaths(imageListStr));
+            }
+        } catch (TskCoreException ex) {
+            throw new CaseActionException(Bundle.Case_checkImagePaths_exceptionOccurred(), ex);
         }
     }
 
@@ -2701,7 +2737,7 @@ public class Case {
                  * with a standard name, physically located in the case
                  * directory.
                  */
-                caseDb = SleuthkitCase.newCase(Paths.get(metadata.getCaseDirectory(), SINGLE_USER_CASE_DB_NAME).toString());
+                caseDb = SleuthkitCase.newCase(Paths.get(metadata.getCaseDirectory(), SINGLE_USER_CASE_DB_NAME).toString(), (ContentStreamProvider) null, APP_NAME);
                 metadata.setCaseDatabaseName(SINGLE_USER_CASE_DB_NAME);
             } else {
                 /*
@@ -2713,6 +2749,7 @@ public class Case {
                 metadata.setCaseDatabaseName(caseDb.getDatabaseName());
             }
         } catch (TskCoreException ex) {
+            throwIfConcurrentDbAccessException(ex);
             throw new CaseActionException(Bundle.Case_exceptionMessage_couldNotCreateCaseDatabase(ex.getLocalizedMessage()), ex);
         } catch (UserPreferencesException ex) {
             throw new CaseActionException(Bundle.Case_exceptionMessage_couldNotGetDbServerConnectionInfo(ex.getLocalizedMessage()), ex);
@@ -2736,16 +2773,26 @@ public class Case {
         "Case.progressMessage.openingCaseDatabase=Opening case database...",
         "# {0} - exception message", "Case.exceptionMessage.couldNotOpenCaseDatabase=Failed to open case database:\n{0}.",
         "# {0} - exception message", "Case.exceptionMessage.unsupportedSchemaVersionMessage=Unsupported case database schema version:\n{0}.",
+        "Case.exceptionMessage.contentProviderCouldNotBeFound=Content provider was specified for the case but could not be loaded.",
         "Case.open.exception.multiUserCaseNotEnabled=Cannot open a multi-user case if multi-user cases are not enabled. See Tools, Options, Multi-User."
     })
     private void openCaseDataBase(ProgressIndicator progressIndicator) throws CaseActionException {
         progressIndicator.progress(Bundle.Case_progressMessage_openingCaseDatabase());
         try {
             String databaseName = metadata.getCaseDatabaseName();
+
+            ContentStreamProvider contentProvider = loadContentProvider(metadata.getContentProviderName());
+            if (StringUtils.isNotBlank(metadata.getContentProviderName()) && contentProvider == null) {
+                if (metadata.getContentProviderName().trim().toUpperCase().startsWith(CT_PROVIDER_PREFIX.toUpperCase())) {
+                    new CTIntegrationMissingDialog(WindowManager.getDefault().getMainWindow(), true).showDialog(null);
+                }
+                throw new CaseActionException(Bundle.Case_exceptionMessage_contentProviderCouldNotBeFound());
+            }
+
             if (CaseType.SINGLE_USER_CASE == metadata.getCaseType()) {
-                caseDb = SleuthkitCase.openCase(Paths.get(metadata.getCaseDirectory(), databaseName).toString());
+                caseDb = SleuthkitCase.openCase(metadata.getCaseDatabasePath(), contentProvider, APP_NAME);
             } else if (UserPreferences.getIsMultiUserModeEnabled()) {
-                caseDb = SleuthkitCase.openCase(databaseName, UserPreferences.getDatabaseConnectionInfo(), metadata.getCaseDirectory());
+                caseDb = SleuthkitCase.openCase(databaseName, UserPreferences.getDatabaseConnectionInfo(), metadata.getCaseDirectory(), contentProvider);
             } else {
                 throw new CaseActionException(Bundle.Case_open_exception_multiUserCaseNotEnabled());
             }
@@ -2755,9 +2802,74 @@ public class Case {
         } catch (UserPreferencesException ex) {
             throw new CaseActionException(Bundle.Case_exceptionMessage_couldNotGetDbServerConnectionInfo(ex.getLocalizedMessage()), ex);
         } catch (TskCoreException ex) {
-            throw new CaseActionException(Bundle.Case_exceptionMessage_couldNotOpenCaseDatabase(ex.getLocalizedMessage()), ex);
+            throwIfConcurrentDbAccessException(ex);
+            throw new CaseActionException(Bundle.Case_exceptionMessage_couldNotOpenCaseDatabase(ex.getLocalizedMessage()), ex);    
         }
     }
+    
+    
+    /**
+     * Throws a CaseActionException if the exception or any nested exception is a ConcurrentDbAccessException (max depth of 10)
+     * @param ex The exception.
+     * @throws CaseActionException Thrown if there is a concurrent db access exception.
+     */
+    @Messages({
+        "# {0} - appplicationName",
+        "Case_throwIfConcurrentDbAccessException_fileLock_concurrentAccessException=The case is open in {0}. Please close it before attempting to open it in Autopsy.",
+        "Case_throwIfConcurrentDbAccessException_fileLock_concurrentAccessException_defaultApp=another application"
+    })
+    private void throwIfConcurrentDbAccessException(Exception ex) throws CaseActionException {
+        ConcurrentDbAccessException concurrentEx = null;
+        Throwable curEx = ex;
+        // max depth search for a concurrent db access exception will be 10
+        for (int i = 0; i < 10; i++) {
+            if (curEx == null) {
+                break;
+            } else if (curEx instanceof ConcurrentDbAccessException foundEx) {
+                concurrentEx = foundEx;
+                break;
+            } else {
+                curEx = curEx.getCause();    
+            }
+        }
+        
+        if (concurrentEx != null) {
+            throw new CaseActionException(Bundle.Case_throwIfConcurrentDbAccessException_fileLock_concurrentAccessException(
+                    StringUtils.defaultIfBlank(concurrentEx.getConflictingApplicationName(),
+                            Bundle.Case_throwIfConcurrentDbAccessException_fileLock_concurrentAccessException_defaultApp())
+            ), concurrentEx);
+        }
+    }
+    
+     
+    /**
+     * Attempts to load a content provider for the provided arguments. Returns
+     * null if no content provider for the arguments can be identified.
+     *
+     * @param providerName The name of the content provider.
+     * @param args The arguments.
+     * @return The content provider or null if no content provider can be
+     * provisioned for the arguments
+     */
+    private static ContentStreamProvider loadContentProvider(String providerName) {
+        Collection<? extends AutopsyContentProvider> customContentProviders = Lookup.getDefault().lookupAll(AutopsyContentProvider.class);
+        if (customContentProviders != null) {
+            for (AutopsyContentProvider customProvider : customContentProviders) {
+                // ensure the provider matches the name
+                if (customProvider == null || !StringUtils.equalsIgnoreCase(providerName, customProvider.getName())) {
+                    continue;
+                }
+                
+                ContentStreamProvider contentProvider = customProvider.load();
+                if (contentProvider != null) {
+                    return contentProvider;
+                }
+            }
+        }
+        
+        return null;
+    }
+
 
     /**
      * Opens the case-level services: the files manager, tags manager and

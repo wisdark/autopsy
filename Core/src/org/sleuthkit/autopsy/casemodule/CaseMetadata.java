@@ -42,6 +42,7 @@ import javax.xml.transform.TransformerException;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
+import org.apache.commons.lang3.StringUtils;
 import org.sleuthkit.autopsy.coreutils.Version;
 import org.sleuthkit.autopsy.coreutils.XMLUtil;
 import org.w3c.dom.Document;
@@ -104,23 +105,31 @@ public final class CaseMetadata {
     private final static String ORIGINAL_CASE_ELEMENT_NAME = "OriginalCase"; //NON-NLS  
 
     /*
+     * Fields from schema version 6
+     */
+    private static final String SCHEMA_VERSION_SIX = "6.0";
+    private final static String CONTENT_PROVIDER_ELEMENT_NAME = "ContentProvider";
+    private final static String CONTENT_PROVIDER_NAME_ELEMENT_NAME = "Name";
+    
+    /*
      * Unread fields, regenerated on save.
      */
     private final static String MODIFIED_DATE_ELEMENT_NAME = "ModifiedDate"; //NON-NLS
     private final static String AUTOPSY_SAVED_BY_ELEMENT_NAME = "SavedByAutopsyVersion"; //NON-NLS
 
-    private final static String CURRENT_SCHEMA_VERSION = SCHEMA_VERSION_FIVE;
+    private final static String CURRENT_SCHEMA_VERSION = SCHEMA_VERSION_SIX;
 
     private final Path metadataFilePath;
     private Case.CaseType caseType;
     private String caseName;
     private CaseDetails caseDetails;
     private String caseDatabaseName;
-    private String caseDatabasePath; // Legacy
+    private String caseDatabasePath;
     private String textIndexName; // Legacy
     private String createdDate;
     private String createdByVersion;
     private CaseMetadata originalMetadata = null; // For portable cases
+    private String contentProviderName;
 
     /**
      * Gets the file extension used for case metadata files.
@@ -176,6 +185,7 @@ public final class CaseMetadata {
         createdByVersion = Version.getVersion();
         createdDate = CaseMetadata.DATE_FORMAT.format(new Date());
         this.originalMetadata = originalMetadata;
+        this.contentProviderName = originalMetadata == null ? null : originalMetadata.contentProviderName;
     }
 
     /**
@@ -214,6 +224,14 @@ public final class CaseMetadata {
     }
 
     /**
+     * @return The custom provider name for content byte data or null if no
+     * custom provider.
+     */
+    public String getContentProviderName() {
+        return this.contentProviderName;
+    }
+
+    /**
      * Gets the full path to the case metadata file.
      *
      * @return The path to the metadata file
@@ -228,7 +246,9 @@ public final class CaseMetadata {
      * @return The case directory.
      */
     public String getCaseDirectory() {
-        return metadataFilePath.getParent().toString();
+        return StringUtils.isBlank(this.caseDatabasePath)
+                ? metadataFilePath.getParent().toString()
+                : Paths.get(this.caseDatabasePath).getParent().toString();
     }
 
     /**
@@ -458,6 +478,15 @@ public final class CaseMetadata {
         Element caseElement = doc.createElement(CASE_ELEMENT_NAME);
         rootElement.appendChild(caseElement);
 
+        Element contentProviderEl = doc.createElement(CONTENT_PROVIDER_ELEMENT_NAME);
+        rootElement.appendChild(contentProviderEl);
+        
+        Element contentProviderNameEl = doc.createElement(CONTENT_PROVIDER_NAME_ELEMENT_NAME);
+        if (this.contentProviderName != null) {
+            contentProviderNameEl.setTextContent(this.contentProviderName);   
+        }
+        contentProviderEl.appendChild(contentProviderNameEl);
+            
         /*
          * Create the children of the case element.
          */
@@ -543,7 +572,15 @@ public final class CaseMetadata {
             } else {
                 this.createdByVersion = getElementTextContent(rootElement, AUTOPSY_CREATED_BY_ELEMENT_NAME, true);
             }
-
+            
+            Element contentProviderEl = getChildElOrNull(rootElement, CONTENT_PROVIDER_ELEMENT_NAME);
+            if (contentProviderEl != null) {
+                Element contentProviderNameEl = getChildElOrNull(contentProviderEl, CONTENT_PROVIDER_NAME_ELEMENT_NAME);
+                this.contentProviderName = contentProviderNameEl != null ? contentProviderNameEl.getTextContent() : null;
+            } else {
+                this.contentProviderName = null;
+            }
+             
             /*
              * Get the content of the children of the case element.
              */
@@ -590,6 +627,7 @@ public final class CaseMetadata {
                     this.textIndexName = getElementTextContent(caseElement, TEXT_INDEX_ELEMENT, false);
                     break;
                 default:
+                    this.caseDatabasePath = getElementTextContent(caseElement, CASE_DB_ABSOLUTE_PATH_ELEMENT_NAME, false);
                     this.caseDatabaseName = getElementTextContent(caseElement, CASE_DB_NAME_RELATIVE_ELEMENT_NAME, true);
                     this.textIndexName = getElementTextContent(caseElement, TEXT_INDEX_ELEMENT, false);
                     break;
@@ -603,18 +641,25 @@ public final class CaseMetadata {
              */
             Path possibleAbsoluteCaseDbPath = Paths.get(this.caseDatabaseName);
             Path caseDirectoryPath = Paths.get(getCaseDirectory());
-            if (possibleAbsoluteCaseDbPath.getNameCount() > 1) {
+            if (possibleAbsoluteCaseDbPath.toFile().isAbsolute()) {
                 this.caseDatabasePath = this.caseDatabaseName;
                 this.caseDatabaseName = caseDirectoryPath.relativize(possibleAbsoluteCaseDbPath).toString();
-            } else {
-                this.caseDatabasePath = caseDirectoryPath.resolve(caseDatabaseName).toAbsolutePath().toString();
             }
 
         } catch (ParserConfigurationException | SAXException | IOException ex) {
             throw new CaseMetadataException(String.format("Error reading from case metadata file %s", metadataFilePath), ex);
         }
     }
-
+    
+    private Element getChildElOrNull(Element parent, String childTag) {
+        NodeList nl = parent.getElementsByTagName(childTag);
+        if (nl != null && nl.getLength() > 0 && nl.item(0) instanceof Element) {
+            return (Element) nl.item(0);
+        } else {
+            return null;
+        }
+    }
+    
     /**
      * Gets the text content of an XML element.
      *
@@ -663,12 +708,12 @@ public final class CaseMetadata {
      * @return The full path to the case database file for a single-user case.
      *
      * @throws UnsupportedOperationException If called for a multi-user case.
-     * @deprecated Do not use.
      */
-    @Deprecated
     public String getCaseDatabasePath() throws UnsupportedOperationException {
         if (Case.CaseType.SINGLE_USER_CASE == caseType) {
-            return Paths.get(getCaseDirectory(), caseDatabaseName).toString();
+            return StringUtils.isBlank(this.caseDatabasePath)
+                    ? this.metadataFilePath.getParent().resolve(this.caseDatabaseName).toString()
+                    : this.caseDatabasePath;
         } else {
             throw new UnsupportedOperationException();
         }

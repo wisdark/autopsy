@@ -48,6 +48,10 @@ public interface AutopsyItemVisitor<T> {
     T visit(DeletedContent dc);
 
     T visit(DeletedContent.DeletedContentFilter dcf);
+    
+    T visit(ScoreContent sc);
+
+    T visit(ScoreContent.ScoreContentFilter scf);
 
     T visit(FileSize fs);
 
@@ -56,6 +60,8 @@ public interface AutopsyItemVisitor<T> {
     T visit(KeywordHits kh);
 
     T visit(HashsetHits hh);
+    
+    T visit(MalwareHits mh);
 
     T visit(EmailExtracted ee);
 
@@ -124,6 +130,16 @@ public interface AutopsyItemVisitor<T> {
         public T visit(DeletedContent.DeletedContentFilter dcf) {
             return defaultVisit(dcf);
         }
+        
+        @Override
+        public T visit(ScoreContent dc) {
+            return defaultVisit(dc);
+        }
+
+        @Override
+        public T visit(ScoreContent.ScoreContentFilter dcf) {
+            return defaultVisit(dcf);
+        }
 
         @Override
         public T visit(FileSize fs) {
@@ -155,6 +171,11 @@ public interface AutopsyItemVisitor<T> {
             return defaultVisit(hh);
         }
 
+        @Override
+        public T visit(MalwareHits mh) {
+            return defaultVisit(mh);
+        }
+        
         @Override
         public T visit(InterestingHits ih) {
             return defaultVisit(ih);
